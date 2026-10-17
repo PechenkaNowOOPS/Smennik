@@ -170,7 +170,7 @@ private fun HomeScreen(
                 Text("ПРОГНОЗ ДОХОДА", color = textMuted, fontSize = 12.sp, letterSpacing = 1.sp)
                 Spacer(Modifier.height(8.dp))
                 Text(rubles(summary.projectedKopecks), fontSize = 30.sp, fontWeight = FontWeight.Bold, color = lime)
-                Text("По запланированным сменам · не выплачено", color = textMuted, fontSize = 12.sp)
+                Text("По запланированным сменам · без учёта выплат", color = textMuted, fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -294,7 +294,7 @@ private fun EditShiftDialog(
         onDismissRequest = onDismiss,
         title = { Text(date.format(dayFormatter).replaceFirstChar { it.uppercase(russian) }) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Время работы и почасовая ставка", color = textMuted)
                 OutlinedTextField(value = start, onValueChange = { start = it }, label = { Text("Начало, ЧЧ:ММ") }, singleLine = true)
                 OutlinedTextField(value = end, onValueChange = { end = it }, label = { Text("Окончание, ЧЧ:ММ") }, singleLine = true)
