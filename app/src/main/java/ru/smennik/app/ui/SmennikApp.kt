@@ -26,6 +26,8 @@ import kotlinx.coroutines.launch
 import ru.smennik.app.BuildConfig
 import ru.smennik.app.data.ShiftUiState
 import ru.smennik.app.domain.*
+import java.time.Instant
+import java.time.ZoneId
 import java.text.NumberFormat
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -54,7 +56,12 @@ fun SmennikApp(
     onRemove: suspend (LocalDate) -> Result<Unit>,
     onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
-    onImportBackup: suspend (Uri) -> Result<Int>
+    onImportBackup: suspend (Uri) -> Result<Int>,
+    onStartWork: suspend (LocalDate, Long) -> Result<Unit>,
+    onTogglePause: suspend (Long) -> Result<Unit>,
+    onFinishWork: suspend (Long) -> Result<Unit>,
+    onPayment: suspend (LocalDate, Long, PaymentType) -> Result<Unit>,
+    onRemovePayment: suspend (Long) -> Result<Unit>
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<LocalDate?>(null) }
@@ -65,6 +72,14 @@ fun SmennikApp(
     var showAbout by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    fun launchOperation(action: suspend () -> Result<Unit>) {
+        scope.launch {
+            action().fold(
+                onSuccess = { snackbarHostState.showSnackbar("Изменения сохранены.") },
+                onFailure = { snackbarHostState.showSnackbar("Не удалось сохранить: ${it.message ?: "ошибка"}") }
+            )
+        }
+    }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -95,11 +110,11 @@ fun SmennikApp(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 NavigationBar(containerColor = surface) {
-                    listOf("Главная", "Календарь").forEachIndexed { index, title ->
+                    listOf("Главная", "Календарь", "Финансы", "Статистика").forEachIndexed { index, title ->
                         NavigationBarItem(
                             selected = tab == index,
                             onClick = { tab = index },
-                            icon = { Text(if (index == 0) "⌂" else "▦", fontSize = 24.sp) },
+                            icon = { Text(listOf("⌂", "▦", "₽", "▥")[index], fontSize = 22.sp) },
                             label = { Text(title) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = lime, selectedTextColor = lime,
@@ -117,7 +132,12 @@ fun SmennikApp(
                     state.loadingError != null -> LoadErrorScreen(state.loadingError, onRetryLoad)
                     tab == 0 -> HomeScreen(
                         shifts = state.shifts,
+                        sessions = state.sessions,
+                        payments = state.payments,
                         isBusy = state.isBusy,
+                        onStartWork = { date, rate -> launchOperation { onStartWork(date, rate) } },
+                        onTogglePause = { id -> launchOperation { onTogglePause(id) } },
+                        onFinishWork = { id -> launchOperation { onFinishWork(id) } },
                         onEdit = { editing = it },
                         onCalendar = { tab = 1 },
                         onAbout = { showAbout = true },
@@ -127,10 +147,26 @@ fun SmennikApp(
                         },
                         onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) }
                     )
-                    else -> CalendarScreen(
+                    tab == 1 -> CalendarScreen(
                         shifts = state.shifts,
+                        sessions = state.sessions,
                         onEdit = { editing = it },
                         onPattern = { day -> patternAnchor = day; showPatterns = true }
+                    )
+                    tab == 2 -> FinanceScreen(
+                        shifts = state.shifts,
+                        sessions = state.sessions,
+                        payments = state.payments,
+                        isBusy = state.isBusy,
+                        onPayment = { day, amount, kind ->
+                            launchOperation { onPayment(day, amount, kind) }
+                        },
+                        onRemovePayment = { id -> launchOperation { onRemovePayment(id) } }
+                    )
+                    else -> StatisticsScreen(
+                        shifts = state.shifts,
+                        sessions = state.sessions,
+                        payments = state.payments
                     )
                 }
             }
@@ -188,6 +224,7 @@ fun SmennikApp(
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.2.0", "Фактическое время смен, паузы, финансы, выплаты, статистика и резервное копирование v3."),
     VersionNote("0.1.6", "Экран «О приложении», история обновлений и проверка совместимости подписанных APK."),
     VersionNote("0.1.5", "Единая нумерация версий и отображение номера сборки."),
     VersionNote("0.1.4", "Подготовка постоянной цифровой подписи релизных APK."),
@@ -270,7 +307,12 @@ private fun LoadErrorScreen(message: String, onRetry: () -> Unit) {
 @Composable
 private fun HomeScreen(
     shifts: List<WorkShift>,
+    sessions: List<WorkSession>,
+    payments: List<WagePayment>,
     isBusy: Boolean,
+    onStartWork: (LocalDate, Long) -> Unit,
+    onTogglePause: (Long) -> Unit,
+    onFinishWork: (Long) -> Unit,
     onEdit: (LocalDate) -> Unit,
     onCalendar: () -> Unit,
     onAbout: () -> Unit,
@@ -293,6 +335,8 @@ private fun HomeScreen(
     val nextShift = shifts.filter { !it.date.isBefore(today) && it.type == DayType.WORK }
         .minByOrNull { it.date }
     val summary = monthlySummary(shifts, YearMonth.from(today))
+    val activeSession = sessions.firstOrNull { it.isRunning }
+    val actualSummary = actualMonthSummary(sessions, payments, YearMonth.from(today), System.currentTimeMillis())
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)
@@ -340,6 +384,52 @@ private fun HomeScreen(
             }
         }
 
+        Spacer(Modifier.height(16.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = surface),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("ФАКТИЧЕСКОЕ ВРЕМЯ", color = lime, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                if (activeSession == null) {
+                    Text("Учёт времени не запущен", fontWeight = FontWeight.SemiBold)
+                    Text("Время работы и перерывов сохраняется даже после закрытия приложения.",
+                        color = textMuted, fontSize = 13.sp)
+                    Button(
+                        enabled = !isBusy,
+                        onClick = { onStartWork(currentShift?.date ?: today,
+                            currentShift?.hourlyKopecks ?: 35_000L) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
+                    ) { Text("▶ Начать рабочую смену") }
+                    if (currentShift == null) Text(
+                        "Без графика используется ставка 350 ₽/ч. Её можно изменить в календаре перед началом.",
+                        color = textMuted, fontSize = 12.sp)
+                } else {
+                    Text(if (activeSession.isPaused) "● Перерыв" else "● Идёт смена",
+                        color = if (activeSession.isPaused) Color(0xFFFFC47A) else lime)
+                    val mins = activeSession.workedMinutes(System.currentTimeMillis())
+                    Text("${mins / 60} ч ${mins % 60} мин", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    Text("Начало: ${Instant.ofEpochMilli(activeSession.startedMs)
+                        .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd.MM HH:mm"))} · " +
+                        "Заработано: ${rubles(activeSession.earnedKopecks(System.currentTimeMillis()))}",
+                        color = textMuted, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(enabled = !isBusy,
+                            onClick = { onTogglePause(activeSession.id) },
+                            modifier = Modifier.weight(1f)) {
+                            Text(if (activeSession.isPaused) "▶ Продолжить" else "Ⅱ Перерыв", color = lime)
+                        }
+                        Button(enabled = !isBusy,
+                            onClick = { onFinishWork(activeSession.id) },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
+                        ) { Text("■ Завершить") }
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(24.dp))
         Text("Этот месяц", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
@@ -354,6 +444,18 @@ private fun HomeScreen(
                 Spacer(Modifier.height(8.dp))
                 Text(rubles(summary.projectedKopecks), fontSize = 30.sp, fontWeight = FontWeight.Bold, color = lime)
                 Text("По запланированным сменам · без учёта выплат", color = textMuted, fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = surface),
+            modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp)) {
+                Text("ФАКТИЧЕСКИ ЗАРАБОТАНО", color = textMuted, fontSize = 12.sp)
+                Text(rubles(actualSummary.earnedKopecks), color = lime, fontSize = 26.sp,
+                    fontWeight = FontWeight.Bold)
+                Text("${actualSummary.completedSessions} завершённых смен · " +
+                    "${actualSummary.minutes / 60} ч ${actualSummary.minutes % 60} мин",
+                    color = textMuted, fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -406,6 +508,7 @@ private fun Metric(label: String, value: String, modifier: Modifier = Modifier) 
 @Composable
 private fun CalendarScreen(
     shifts: List<WorkShift>,
+    sessions: List<WorkSession>,
     onEdit: (LocalDate) -> Unit,
     onPattern: (LocalDate) -> Unit
 ) {
@@ -413,6 +516,12 @@ private fun CalendarScreen(
     val today = LocalDate.now()
     val summary = monthlySummary(shifts, month)
     val byDay = remember(shifts) { shifts.associateBy { it.date } }
+    val completedDates = remember(sessions) {
+        sessions.filter { !it.isRunning }.map { it.date }.toSet()
+    }
+    val activeDates = remember(sessions) {
+        sessions.filter { it.isRunning }.map { it.date }.toSet()
+    }
     val first = month.atDay(1)
     val start = first.minusDays((first.dayOfWeek.value - 1).toLong())
     val cells = (0 until 42).map { start.plusDays(it.toLong()) }
@@ -454,8 +563,12 @@ private fun CalendarScreen(
                         Text(date.dayOfMonth.toString(),
                             color = if (!isThisMonth) Color(0xFF59646F) else if (working) lime else Color.White,
                             fontWeight = if (working || date == today) FontWeight.Bold else FontWeight.Normal)
-                        if (working) Text("●", color = lime, fontSize = 11.sp)
-                        else if (shift?.type == DayType.OFF && isThisMonth) Text("—", color = textMuted, fontSize = 11.sp)
+                        when {
+                            isThisMonth && date in activeDates -> Text("▶", color = Color(0xFFFFC47A), fontSize = 11.sp)
+                            isThisMonth && date in completedDates -> Text("✓", color = lime, fontSize = 11.sp)
+                            working -> Text("●", color = lime, fontSize = 11.sp)
+                            shift?.type == DayType.OFF && isThisMonth -> Text("—", color = textMuted, fontSize = 11.sp)
+                        }
                     }
                 }
             }
@@ -465,6 +578,8 @@ private fun CalendarScreen(
             Text("● Рабочий", color = lime, fontSize = 13.sp)
             Spacer(Modifier.width(14.dp))
             Text("— Выходной", color = textMuted, fontSize = 13.sp)
+            Spacer(Modifier.width(10.dp))
+            Text("✓ Учтена", color = lime, fontSize = 13.sp)
         }
         Spacer(Modifier.height(20.dp))
         Card(colors = CardDefaults.cardColors(containerColor = surface)) {
@@ -482,6 +597,174 @@ private fun CalendarScreen(
             Text("Автозаполнение графика", color = lime)
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+
+@Composable
+private fun FinanceScreen(
+    shifts: List<WorkShift>,
+    sessions: List<WorkSession>,
+    payments: List<WagePayment>,
+    isBusy: Boolean,
+    onPayment: (LocalDate, Long, PaymentType) -> Unit,
+    onRemovePayment: (Long) -> Unit
+) {
+    var month by remember { mutableStateOf(YearMonth.now()) }
+    var addDialog by remember { mutableStateOf(false) }
+    var removeDialog by remember { mutableStateOf<WagePayment?>(null) }
+    val now = System.currentTimeMillis()
+    val planned = monthlySummary(shifts, month)
+    val actual = actualMonthSummary(sessions, payments, month, now)
+    val monthPayments = payments.filter { YearMonth.from(it.date) == month }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Spacer(Modifier.height(8.dp))
+        Text("Финансы", fontSize = 27.sp, fontWeight = FontWeight.Bold)
+        MonthSelector(month, onPrev = { month = month.minusMonths(1) },
+            onNext = { month = month.plusMonths(1) })
+        MoneyCard("Плановый доход", rubles(planned.projectedKopecks))
+        MoneyCard("Фактически заработано", rubles(actual.earnedKopecks), highlighted = true)
+        MoneyCard("Получено выплат", rubles(actual.paidKopecks))
+        MoneyCard("Расчётный остаток", rubles(actual.outstandingKopecks),
+            hint = "По учтённым сменам и выплатам за выбранный месяц; без налогов и надбавок.")
+        Button(
+            onClick = { addDialog = true }, enabled = !isBusy, modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
+        ) { Text("+ Записать выплату") }
+        Text("История выплат", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        if (monthPayments.isEmpty()) Text("Выплат пока нет", color = textMuted)
+        monthPayments.forEach { entry ->
+            Card(colors = CardDefaults.cardColors(containerColor = surface)) {
+                Row(Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (entry.type == PaymentType.ADVANCE) "Аванс" else "Зарплата",
+                            fontWeight = FontWeight.Bold)
+                        Text(entry.date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy")), color = textMuted)
+                    }
+                    Text(rubles(entry.amountKopecks), color = lime)
+                    TextButton(enabled = !isBusy, onClick = { removeDialog = entry }) {
+                        Text("×", color = Color(0xFFFF8585), fontSize = 22.sp)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+    if (addDialog) {
+        var rublesInput by remember { mutableStateOf("") }
+        var type by remember { mutableStateOf(PaymentType.ADVANCE) }
+        var dateText by remember { mutableStateOf(LocalDate.now().toString()) }
+        var error by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { addDialog = false },
+            title = { Text("Записать выплату") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = rublesInput,
+                        onValueChange = { if (it.all { c -> c.isDigit() }) rublesInput = it },
+                        label = { Text("Сумма, ₽") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    OutlinedTextField(value = dateText, onValueChange = { dateText = it },
+                        label = { Text("Дата ГГГГ-ММ-ДД") }, singleLine = true)
+                    Row {
+                        FilterChip(selected = type == PaymentType.ADVANCE,
+                            onClick = { type = PaymentType.ADVANCE }, label = { Text("Аванс") })
+                        Spacer(Modifier.width(8.dp))
+                        FilterChip(selected = type == PaymentType.SALARY,
+                            onClick = { type = PaymentType.SALARY }, label = { Text("Зарплата") })
+                    }
+                    if (error.isNotEmpty()) Text(error, color = Color(0xFFFF8585))
+                }
+            },
+            confirmButton = {
+                Button(enabled = !isBusy, onClick = {
+                    val amount = rublesInput.toLongOrNull()
+                    val date = runCatching { LocalDate.parse(dateText) }.getOrNull()
+                    if (amount == null || amount !in 1..100_000_000 || date == null) {
+                        error = "Проверьте сумму и дату."
+                    } else {
+                        onPayment(date, amount * 100, type)
+                        addDialog = false
+                    }
+                }) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(onClick = { addDialog = false }) { Text("Отмена") } }
+        )
+    }
+    removeDialog?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { removeDialog = null },
+            title = { Text("Удалить выплату?") },
+            text = { Text("Сведения о выплате ${rubles(entry.amountKopecks)} будут удалены.") },
+            confirmButton = {
+                Button(enabled = !isBusy, onClick = {
+                    onRemovePayment(entry.id)
+                    removeDialog = null
+                }) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { removeDialog = null }) { Text("Отмена") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun StatisticsScreen(
+    shifts: List<WorkShift>, sessions: List<WorkSession>, payments: List<WagePayment>
+) {
+    var month by remember { mutableStateOf(YearMonth.now()) }
+    val plan = monthlySummary(shifts, month)
+    val actual = actualMonthSummary(sessions, payments, month, System.currentTimeMillis())
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Spacer(Modifier.height(8.dp))
+        Text("Статистика", fontSize = 27.sp, fontWeight = FontWeight.Bold)
+        MonthSelector(month, { month = month.minusMonths(1) }, { month = month.plusMonths(1) })
+        Text("Рабочее время", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+        MoneyCard("По графику", "${plan.hours} ч ${plan.remainderMinutes} мин")
+        MoneyCard("Фактически", "${actual.minutes / 60} ч ${actual.minutes % 60} мин", highlighted = true)
+        Text("Смены", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+        MoneyCard("Запланировано", "${plan.shifts}")
+        MoneyCard("Завершено", "${actual.completedSessions}")
+        if (actual.activeSessions > 0) MoneyCard("Идёт сейчас", "${actual.activeSessions}")
+        Text("Заработок", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+        MoneyCard("План", rubles(plan.projectedKopecks))
+        MoneyCard("Факт", rubles(actual.earnedKopecks), highlighted = true)
+        Text(
+            "Фактическое время считается по запускам и завершениям таймера; перерывы исключаются. " +
+                "Ночные смены учитываются по дате их начала.",
+            color = textMuted, fontSize = 12.sp
+        )
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+@Composable
+private fun MonthSelector(month: YearMonth, onPrev: () -> Unit, onNext: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onPrev) { Text("‹", color = lime, fontSize = 28.sp) }
+        Text(month.format(monthFormatter).replaceFirstChar { it.uppercase(russian) },
+            Modifier.weight(1f), textAlign = TextAlign.Center,
+            fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        TextButton(onClick = onNext) { Text("›", color = lime, fontSize = 28.sp) }
+    }
+}
+
+@Composable
+private fun MoneyCard(label: String, value: String, highlighted: Boolean = false, hint: String? = null) {
+    Card(colors = CardDefaults.cardColors(containerColor = surface), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(label, color = textMuted, fontSize = 13.sp)
+            Text(value, color = if (highlighted) lime else Color.White,
+                fontWeight = FontWeight.Bold, fontSize = 25.sp)
+            if (hint != null) Text(hint, color = textMuted, fontSize = 12.sp)
+        }
     }
 }
 

@@ -22,7 +22,12 @@ class MainActivity : ComponentActivity() {
                 onRemove = model::remove,
                 onPattern = model::generate,
                 onExportBackup = model::exportBackup,
-                onImportBackup = model::importBackup
+                onImportBackup = model::importBackup,
+                onStartWork = model::startWork,
+                onTogglePause = model::togglePause,
+                onFinishWork = model::finishWork,
+                onPayment = model::addPayment,
+                onRemovePayment = model::removePayment
             )
         }
     }
