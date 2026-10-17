@@ -1,0 +1,33 @@
+# IDE / Gradle / Android
+.gradle/
+.idea/
+*.iml
+local.properties
+/build/
+**/build/
+.cxx/
+.externalNativeBuild/
+*.apk
+*.aab
+*.ap_
+*.hprof
+captures/
+
+# Keys, tokens, local configuration
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+*service-account*.json
+secrets.properties
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+*.tmp
