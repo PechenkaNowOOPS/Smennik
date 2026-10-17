@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import ru.smennik.app.domain.CustomCycle
+import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.WorkSession
 import ru.smennik.app.domain.WagePayment
 import ru.smennik.app.domain.PaymentType
@@ -26,6 +28,7 @@ data class ShiftUiState(
     val shifts: List<WorkShift> = emptyList(),
     val sessions: List<WorkSession> = emptyList(),
     val payments: List<WagePayment> = emptyList(),
+    val workplaces: List<Workplace> = emptyList(),
     val isLoading: Boolean = true,
     val isBusy: Boolean = false,
     val loadingError: String? = null
@@ -38,6 +41,14 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(ShiftUiState())
     val uiState: StateFlow<ShiftUiState> = _uiState.asStateFlow()
 
+    private data class StoreSnapshot(
+        val shifts: List<WorkShift>, val sessions: List<WorkSession>,
+        val payments: List<WagePayment>, val workplaces: List<Workplace>
+    )
+    private fun snapshot() = StoreSnapshot(
+        store.all(),store.allSessions(),store.allPayments(),store.workplaces()
+    )
+
     init { load() }
 
     fun reload() {
@@ -49,10 +60,11 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val snapshot = writeMutex.withLock {
-                    withContext(Dispatchers.IO) { Triple(store.all(), store.allSessions(), store.allPayments()) }
+                    withContext(Dispatchers.IO) { snapshot() }
                 }
                 _uiState.update {
-                    it.copy(shifts = snapshot.first, sessions = snapshot.second, payments = snapshot.third,
+                    it.copy(shifts = snapshot.shifts, sessions = snapshot.sessions,
+                        payments = snapshot.payments, workplaces = snapshot.workplaces,
                         isLoading = false, loadingError = null)
                 }
             } catch (error: Exception) {
@@ -69,11 +81,12 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             val shifts = writeMutex.withLock {
                 withContext(Dispatchers.IO) {
                     action()
-                    Triple(store.all(), store.allSessions(), store.allPayments())
+                    snapshot()
                 }
             }
-            _uiState.update { it.copy(shifts = shifts.first, sessions = shifts.second,
-                payments = shifts.third, loadingError = null) }
+            _uiState.update { it.copy(shifts = shifts.shifts, sessions = shifts.sessions,
+                payments = shifts.payments, workplaces = shifts.workplaces,
+                loadingError = null) }
             Result.success(Unit)
         } catch (error: Exception) {
             Result.failure(error)
@@ -82,8 +95,8 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    suspend fun startWork(date: LocalDate, hourlyKopecks: Long): Result<Unit> =
-        mutate { store.startSession(date, hourlyKopecks, System.currentTimeMillis()) }
+    suspend fun startWork(date: LocalDate, hourlyKopecks: Long, workplaceId: Long = 1): Result<Unit> =
+        mutate { store.startSession(date, hourlyKopecks, System.currentTimeMillis(), workplaceId) }
 
     suspend fun togglePause(id: Long): Result<Unit> =
         mutate { store.togglePause(id, System.currentTimeMillis()) }
@@ -91,14 +104,18 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun finishWork(id: Long): Result<Unit> =
         mutate { store.finishSession(id, System.currentTimeMillis()) }
 
-    suspend fun addPayment(date: LocalDate, amount: Long, type: PaymentType): Result<Unit> =
-        mutate { store.addPayment(date, amount, type) }
+    suspend fun addPayment(date: LocalDate, amount: Long, type: PaymentType, workplaceId: Long = 1): Result<Unit> =
+        mutate { store.addPayment(date, amount, type, workplaceId) }
 
     suspend fun removePayment(id: Long): Result<Unit> =
         mutate { store.removePayment(id) }
 
+    suspend fun addWorkplace(name: String, hourlyKopecks: Long): Result<Unit> =
+        mutate { store.addWorkplace(name, hourlyKopecks) }
+
     suspend fun save(shift: WorkShift): Result<Unit> = mutate { store.save(shift) }
-    suspend fun remove(date: LocalDate): Result<Unit> = mutate { store.remove(date) }
+    suspend fun remove(date: LocalDate, workplaceId: Long = 1): Result<Unit> =
+        mutate { store.remove(date, workplaceId) }
 
     suspend fun generate(
         anchor: LocalDate,
@@ -106,9 +123,17 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         startMinutes: Int,
         endMinutes: Int,
         hourlyKopecks: Long,
-        replaceExisting: Boolean
+        replaceExisting: Boolean, workplaceId: Long = 1
     ): Result<Unit> = mutate {
-        store.fillPattern(anchor, pattern, startMinutes, endMinutes, hourlyKopecks, replaceExisting)
+        store.fillPattern(anchor, pattern, startMinutes, endMinutes, hourlyKopecks, replaceExisting, workplaceId)
+    }
+
+    suspend fun generateCustom(
+        anchor: LocalDate, mask: String, startMinutes: Int, endMinutes: Int,
+        hourlyKopecks: Long, replaceExisting: Boolean, workplaceId: Long
+    ): Result<Unit> = mutate {
+        store.fillCustomPattern(anchor, CustomCycle(mask), startMinutes, endMinutes,
+            hourlyKopecks, replaceExisting, workplaceId)
     }
 
     suspend fun exportBackup(uri: Uri): Result<Unit> {
@@ -116,7 +141,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             writeMutex.withLock {
                 withContext(Dispatchers.IO) {
-                    val bytes = ShiftBackup.encode(store.all(), store.allSessions(), store.allPayments())
+                    val bytes = ShiftBackup.encode(store.all(), store.allSessions(), store.allPayments(),store.workplaces())
                     val output = resolver.openOutputStream(uri, "w")
                         ?: throw IOException("Не удалось открыть выбранный файл для записи.")
                     output.use { it.write(bytes) }
@@ -155,11 +180,12 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             val updated = writeMutex.withLock {
                 withContext(Dispatchers.IO) {
                     store.replaceAllSnapshot(restored)
-                    Triple(store.all(), store.allSessions(), store.allPayments())
+                    snapshot()
                 }
             }
-            _uiState.update { it.copy(shifts = updated.first, sessions = updated.second,
-                payments = updated.third, loadingError = null) }
+            _uiState.update { it.copy(shifts = updated.shifts, sessions = updated.sessions,
+                payments = updated.payments, workplaces = updated.workplaces,
+                loadingError = null) }
             Result.success(restored.shifts.size + restored.sessions.size + restored.payments.size)
         } catch (error: Exception) {
             Result.failure(error)
