@@ -41,7 +41,7 @@ Android устанавливает новую версию поверх стар
 
 После настройки откройте Actions → **Android Stable APK** → Run workflow.
 Проверенная сборка доступна в Artifacts под именем
-`Smennik-0.1.4-signed`.
+`Smennik-<версия>-signed`.
 
 ## Защита от случайной смены ключа
 

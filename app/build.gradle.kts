@@ -4,6 +4,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Version name and monotonically increasing Android versionCode are maintained in one file.
+val appVersion = java.util.Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+val appVersionName = appVersion.getProperty("versionName")
+    ?: error("Missing versionName in version.properties")
+val appVersionCode = appVersion.getProperty("versionCode")?.toIntOrNull()
+    ?: error("Invalid versionCode in version.properties")
+
 // The signing key is deliberately not stored in this public repository.
 val stableKeyPath = System.getenv("SMENNIK_SIGNING_FILE")
 val stableKeyPassword = System.getenv("SMENNIK_SIGNING_PASSWORD")
@@ -25,8 +34,8 @@ android {
         applicationId = "ru.smennik.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -41,7 +50,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     testOptions { unitTests.isReturnDefaultValues = true }
 }
 

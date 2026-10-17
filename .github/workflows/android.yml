@@ -25,6 +25,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+      - name: Verify version numbering
+        run: python3 scripts/check_version.py
+      - name: Read artifact version
+        shell: bash
+        run: |
+          value="$(sed -n 's/^versionName=//p' version.properties)"
+          echo "SMENNIK_VERSION=$value" >> "$GITHUB_ENV"
       - name: Unit tests
         run: gradle :app:testDebugUnitTest --stacktrace
       - name: Load persistent signing key
@@ -66,6 +73,6 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: Smennik-0.1.4-signed
+          name: Smennik-${{ env.SMENNIK_VERSION }}-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error

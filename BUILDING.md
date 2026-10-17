@@ -1,4 +1,4 @@
-# Сборка Сменник 0.1.4
+# Сборка Сменник (номер из version.properties)
 
 ## Требования
 
@@ -23,10 +23,12 @@ gradle :app:testDebugUnitTest
 
 В GitHub Actions релиз собирается через `gradle :app:assembleRelease`,
 проверяется `apksigner verify` и публикуется как
-`Smennik-0.1.4-signed`. Без секретов выпуск намеренно блокируется.
+`Smennik-<версия>-signed`. Без секретов выпуск намеренно блокируется.
 
 При локальной сборке задайте `SMENNIK_SIGNING_FILE` (путь к приватному
 `.jks`) и `SMENNIK_SIGNING_PASSWORD`; после этого запускайте
 `gradle :app:assembleRelease`.
 
 Не добавляйте приватный ключ, пароль или секреты в репозиторий.
+
+Перед сборкой выполните `python3 scripts/check_version.py` для проверки единой нумерации.

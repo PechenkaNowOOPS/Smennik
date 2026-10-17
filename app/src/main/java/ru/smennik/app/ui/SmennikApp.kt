@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import ru.smennik.app.BuildConfig
 import ru.smennik.app.data.ShiftUiState
 import ru.smennik.app.domain.*
 import java.text.NumberFormat
@@ -316,6 +317,11 @@ private fun HomeScreen(
         TextButton(onClick = onCalendar, modifier = Modifier.fillMaxWidth()) {
             Text("Открыть календарь →", color = Color.White)
         }
+        Text(
+            "Версия ${BuildConfig.VERSION_NAME} · сборка ${BuildConfig.VERSION_CODE}",
+            modifier = Modifier.fillMaxWidth(),
+            color = textMuted, fontSize = 12.sp, textAlign = TextAlign.Center
+        )
         Spacer(Modifier.height(16.dp))
     }
 }
