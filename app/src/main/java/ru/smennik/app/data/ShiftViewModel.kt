@@ -7,12 +7,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.smennik.app.domain.WorkPattern
 import ru.smennik.app.domain.WorkShift
 import java.time.LocalDate
 
 class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     private val store = ShiftStore(application.applicationContext)
+    private val writeMutex = Mutex()
     private val _shifts = MutableStateFlow<List<WorkShift>>(emptyList())
     val shifts: StateFlow<List<WorkShift>> = _shifts
     private val _error = MutableStateFlow<String?>(null)
@@ -22,12 +25,14 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun mutate(action: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                action()
-                _shifts.value = store.all()
-                _error.value = null
-            } catch (e: Exception) {
-                _error.value = "Не удалось сохранить данные: ${e.message ?: "неизвестная ошибка"}"
+            writeMutex.withLock {
+                try {
+                    action()
+                    _shifts.value = store.all()
+                    _error.value = null
+                } catch (e: Exception) {
+                    _error.value = "Не удалось сохранить данные: ${e.message ?: "неизвестная ошибка"}"
+                }
             }
         }
     }
