@@ -1,0 +1,39 @@
+name: Build Unsigned APK for Offline Signing
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-unsigned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;35.0.0'
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Validate app version
+        run: python3 scripts/check_version.py
+      - name: Run tests and assemble unsigned release
+        run: gradle :app:testDebugUnitTest :app:assembleRelease --stacktrace
+      - name: Verify unsigned APK exists
+        shell: bash
+        run: |
+          test -s app/build/outputs/apk/release/app-release-unsigned.apk
+          echo "SMENNIK_VERSION=$(sed -n 's/^versionName=//p' version.properties)" >> "$GITHUB_ENV"
+      - name: Publish unsigned APK for secure offline signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: Smennik-${{ env.SMENNIK_VERSION }}-unsigned-DO-NOT-INSTALL
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
