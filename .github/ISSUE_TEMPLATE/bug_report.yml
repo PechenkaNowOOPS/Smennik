@@ -1,0 +1,20 @@
+name: Ошибка
+description: Сообщение об ошибке приложения
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Что произошло?
+      description: Фактическое и ожидаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия приложения и Android
