@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Designed for the 66dp launcher safe zone -->
+    <path android:fillColor="#1B2229"
+        android:pathData="M37,29 L71,29 C77,29 80,32 80,38 L80,72 C80,78 77,81 71,81 L37,81 C31,81 28,78 28,72 L28,38 C28,32 31,29 37,29 Z"/>
+    <path android:fillColor="@android:color/transparent"
+        android:strokeColor="#F2F7F2"
+        android:strokeWidth="2.7"
+        android:pathData="M37,29 L71,29 C77,29 80,32 80,38 L80,72 C80,78 77,81 71,81 L37,81 C31,81 28,78 28,72 L28,38 C28,32 31,29 37,29 Z"/>
+    <path android:fillColor="#B7F34B"
+        android:pathData="M29.5,38.5 L78.5,38.5 L78.5,46 L29.5,46 Z"/>
+    <path android:fillColor="@android:color/transparent"
+        android:strokeColor="#B7F34B"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M40,25 L40,34 M68,25 L68,34"/>
+    <!-- A highlighted work shift and a small rhythm grid -->
+    <path android:fillColor="#B7F34B"
+        android:pathData="M37,54 L48,54 L48,65 L37,65 Z"/>
+    <path android:fillColor="#62716C"
+        android:pathData="M54,54 L71,54 L71,58 L54,58 Z"/>
+    <path android:fillColor="#62716C"
+        android:pathData="M54,63 L71,63 L71,67 L54,67 Z"/>
+    <path android:fillColor="#B7F34B"
+        android:pathData="M37,71 L48,71 L48,75 L37,75 Z"/>
+</vector>
