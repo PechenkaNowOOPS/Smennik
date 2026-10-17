@@ -3,6 +3,7 @@ package ru.smennik.app.data
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.smennik.app.domain.DayType
+import ru.smennik.app.domain.ShiftOrigin
 import ru.smennik.app.domain.WorkShift
 import java.security.MessageDigest
 import java.time.LocalDate
@@ -11,7 +12,7 @@ import java.time.LocalDate
 object ShiftBackup {
     const val MAX_BYTES = 5 * 1024 * 1024
     private const val FORMAT = "ru.smennik.backup"
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val MAX_SHIFTS = 100_000
 
     fun encode(shifts: List<WorkShift>): ByteArray {
@@ -23,7 +24,8 @@ object ShiftBackup {
                 .put("type", shift.type.name)
                 .put("startMinutes", shift.startMinutes)
                 .put("endMinutes", shift.endMinutes)
-                .put("hourlyKopecks", shift.hourlyKopecks))
+                .put("hourlyKopecks", shift.hourlyKopecks)
+                .put("origin", shift.origin.name))
         }
         val payload = JSONObject()
             .put("version", VERSION)
@@ -51,7 +53,8 @@ object ShiftBackup {
         }
 
         val content = JSONObject(payload)
-        require(content.getInt("version") == VERSION) { "Версия резервной копии не поддерживается." }
+        val fileVersion = content.getInt("version")
+        require(fileVersion in 1..VERSION) { "Версия резервной копии не поддерживается." }
         val entries = content.getJSONArray("shifts")
         require(entries.length() <= MAX_SHIFTS) { "В резервной копии слишком много записей." }
         val dates = HashSet<LocalDate>(entries.length())
@@ -64,7 +67,9 @@ object ShiftBackup {
                 type = DayType.valueOf(entry.getString("type")),
                 startMinutes = entry.getInt("startMinutes"),
                 endMinutes = entry.getInt("endMinutes"),
-                hourlyKopecks = entry.getLong("hourlyKopecks")
+                hourlyKopecks = entry.getLong("hourlyKopecks"),
+                origin = if (fileVersion == 1) ShiftOrigin.MANUAL else
+                    ShiftOrigin.valueOf(entry.getString("origin"))
             )
         }
     }

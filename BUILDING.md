@@ -1,4 +1,4 @@
-# Сборка Сменник 0.1.0-alpha.1
+# Сборка Сменник 0.1.2
 
 ## Требования
 - Android Studio с Android SDK 36 и Build Tools 35.0.0.

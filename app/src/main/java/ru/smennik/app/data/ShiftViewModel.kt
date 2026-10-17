@@ -79,9 +79,10 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         pattern: WorkPattern,
         startMinutes: Int,
         endMinutes: Int,
-        hourlyKopecks: Long
+        hourlyKopecks: Long,
+        replaceExisting: Boolean
     ): Result<Unit> = mutate {
-        store.fillPattern(anchor, pattern, startMinutes, endMinutes, hourlyKopecks)
+        store.fillPattern(anchor, pattern, startMinutes, endMinutes, hourlyKopecks, replaceExisting)
     }
 
     suspend fun exportBackup(uri: Uri): Result<Unit> {

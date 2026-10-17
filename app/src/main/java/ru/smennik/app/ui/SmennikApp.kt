@@ -27,6 +27,8 @@ import ru.smennik.app.data.ShiftUiState
 import ru.smennik.app.domain.*
 import java.text.NumberFormat
 import java.time.LocalDate
+import java.time.LocalDateTime
+import kotlinx.coroutines.delay
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -49,7 +51,7 @@ fun SmennikApp(
     onRetryLoad: () -> Unit,
     onSave: suspend (WorkShift) -> Result<Unit>,
     onRemove: suspend (LocalDate) -> Result<Unit>,
-    onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long) -> Result<Unit>,
+    onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
     onImportBackup: suspend (Uri) -> Result<Int>
 ) {
@@ -142,7 +144,7 @@ fun SmennikApp(
             anchor = patternAnchor,
             isBusy = state.isBusy,
             onDismiss = { showPatterns = false },
-            onSelect = { pattern, start, end, rate -> onPattern(patternAnchor, pattern, start, end, rate) }
+            onSelect = { pattern, start, end, rate, replace -> onPattern(patternAnchor, pattern, start, end, rate, replace) }
         )
         restoreUri?.let { uri ->
             AlertDialog(
@@ -212,9 +214,18 @@ private fun HomeScreen(
     onExport: () -> Unit,
     onImport: () -> Unit
 ) {
-    val today = LocalDate.now()
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            now = LocalDateTime.now()
+        }
+    }
+    val today = now.toLocalDate()
     val todayEntry = shifts.firstOrNull { it.date == today }
-    val currentShift = todayEntry?.takeIf { it.type == DayType.WORK }
+    val active = activeShiftAt(shifts, now)
+    val todayShift = todayEntry?.takeIf { it.type == DayType.WORK }
+    val currentShift = active ?: todayShift
     val nextShift = shifts.filter { !it.date.isBefore(today) && it.type == DayType.WORK }
         .minByOrNull { it.date }
     val summary = monthlySummary(shifts, YearMonth.from(today))
@@ -232,6 +243,7 @@ private fun HomeScreen(
             Column(Modifier.fillMaxWidth().padding(24.dp)) {
                 Text(
                     when {
+                        active != null && active.date.isBefore(today) -> "●  ПРОДОЛЖАЕТСЯ НОЧНАЯ СМЕНА"
                         currentShift != null -> "●  СЕГОДНЯ РАБОТА"
                         todayEntry?.type == DayType.OFF -> "●  СЕГОДНЯ ВЫХОДНОЙ"
                         else -> "●  ГРАФИК НЕ ЗАДАН"
@@ -257,7 +269,7 @@ private fun HomeScreen(
                 )
                 Spacer(Modifier.height(20.dp))
                 Button(
-                    onClick = { onEdit(today) },
+                    onClick = { onEdit(currentShift?.date ?: today) },
                     colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite),
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(if (currentShift == null) "+ Добавить смену" else "Изменить смену") }
@@ -269,7 +281,7 @@ private fun HomeScreen(
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Metric("Смены", summary.shifts.toString(), Modifier.weight(1f))
-            Metric("Часы", "${summary.hours} ч", Modifier.weight(1f))
+            Metric("Часы", "${summary.hours} ч ${summary.remainderMinutes} мин", Modifier.weight(1f))
         }
         Spacer(Modifier.height(12.dp))
         Card(colors = CardDefaults.cardColors(containerColor = surface), modifier = Modifier.fillMaxWidth()) {
@@ -386,7 +398,7 @@ private fun CalendarScreen(
         Card(colors = CardDefaults.cardColors(containerColor = surface)) {
             Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column { Text("СМЕН", color = textMuted, fontSize = 12.sp); Text(summary.shifts.toString(), fontSize = 25.sp) }
-                Column { Text("ЧАСОВ", color = textMuted, fontSize = 12.sp); Text(summary.hours.toString(), fontSize = 25.sp) }
+                Column { Text("ЧАСОВ", color = textMuted, fontSize = 12.sp); Text("${summary.hours} ч ${summary.remainderMinutes} мин", fontSize = 19.sp) }
                 Column { Text("ПРОГНОЗ", color = textMuted, fontSize = 12.sp); Text(rubles(summary.projectedKopecks), fontSize = 20.sp, color = lime) }
             }
         }
@@ -458,7 +470,7 @@ private fun EditShiftDialog(
                 OutlinedTextField(value = start, onValueChange = { start = it }, label = { Text("Начало, ЧЧ:ММ") }, singleLine = true)
                 OutlinedTextField(value = end, onValueChange = { end = it }, label = { Text("Окончание, ЧЧ:ММ") }, singleLine = true)
                 OutlinedTextField(value = hourlyRubles, onValueChange = { hourlyRubles = it }, label = { Text("Ставка, ₽/час") }, singleLine = true)
-                Text("Ночная смена: окончание раньше начала означает следующий день.", fontSize = 12.sp, color = textMuted)
+                Text("Равное время начала и конца — смена 24 часа. Более раннее окончание — следующий день.", fontSize = 12.sp, color = textMuted)
                 if (validation.isNotEmpty()) Text(validation, color = Color(0xFFFF8585), fontSize = 13.sp)
                 if (operationError.isNotEmpty()) Text(operationError, color = Color(0xFFFF8585), fontSize = 13.sp)
                 OutlinedButton(enabled = !disabled, onClick = { submit(WorkShift(date, DayType.OFF)) }, modifier = Modifier.fillMaxWidth()) {
@@ -474,7 +486,7 @@ private fun EditShiftDialog(
                 val from = parseTime(start)
                 val to = parseTime(end)
                 val rate = hourlyRubles.toLongOrNull()
-                if (from == null || to == null || from == to || rate == null || rate !in 0..100_000) {
+                if (from == null || to == null || rate == null || rate !in 0..100_000) {
                     validation = "Проверь время (ЧЧ:ММ) и ставку (0–100000 ₽)."
                 } else submit(WorkShift(date, DayType.WORK, from, to, rate * 100))
             }) { Text(if (saving) "Сохраняю…" else "Сохранить") }
@@ -483,12 +495,14 @@ private fun EditShiftDialog(
     )
 }
 
+private data class PatternSelection(val pattern: WorkPattern, val start: Int, val end: Int, val rate: Long)
+
 @Composable
 private fun PatternDialog(
     anchor: LocalDate,
     isBusy: Boolean,
     onDismiss: () -> Unit,
-    onSelect: suspend (WorkPattern, Int, Int, Long) -> Result<Unit>
+    onSelect: suspend (WorkPattern, Int, Int, Long, Boolean) -> Result<Unit>
 ) {
     val scope = rememberCoroutineScope()
     var start by remember(anchor) { mutableStateOf("08:00") }
@@ -496,14 +510,16 @@ private fun PatternDialog(
     var hourlyRubles by remember(anchor) { mutableStateOf("350") }
     var validation by remember(anchor) { mutableStateOf("") }
     var saving by remember(anchor) { mutableStateOf(false) }
+    var replaceExisting by remember(anchor) { mutableStateOf(false) }
+    var pending by remember(anchor) { mutableStateOf<PatternSelection?>(null) }
     val disabled = isBusy || saving
 
-    fun selectPattern(pattern: WorkPattern, from: Int, to: Int, rate: Long) {
+    fun selectPattern(pattern: WorkPattern, from: Int, to: Int, rate: Long, replace: Boolean) {
         if (disabled) return
         saving = true
         validation = ""
         scope.launch {
-            onSelect(pattern, from, to, rate).fold(
+            onSelect(pattern, from, to, rate, replace).fold(
                 onSuccess = { onDismiss() },
                 onFailure = {
                     validation = "Не удалось создать график: ${it.message ?: "ошибка базы данных"}"
@@ -521,7 +537,14 @@ private fun PatternDialog(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("От ${anchor.format(dayFormatter)}. Первый день — рабочий. Заполняются 90 дней, существующие записи не меняются.", color = textMuted)
+                Text("Период: ${anchor.format(dayFormatter)} — ${anchor.plusDays(89).format(dayFormatter)}. При обычном обновлении сохраняются вручную изменённые дни.", color = textMuted)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = replaceExisting, enabled = !disabled,
+                        onCheckedChange = { replaceExisting = it })
+                    Text("Заменить ВСЕ дни периода, включая ручные", color = Color(0xFFFFC47A), fontSize = 12.sp)
+                }
+                if (replaceExisting) Text("Внимание: все записи за эти 90 дней будут заменены. Сначала экспортируйте резервную копию.", color = Color(0xFFFF8585), fontSize = 12.sp)
+                Text("Для 5/2 рабочие дни — понедельник–пятница. Совпадающее начало и окончание = 24 ч.", color = textMuted, fontSize = 12.sp)
                 OutlinedTextField(
                     value = start, onValueChange = { start = it },
                     label = { Text("Начало смены, ЧЧ:ММ") }, singleLine = true
@@ -542,10 +565,14 @@ private fun PatternDialog(
                         val from = parseTime(start)
                         val to = parseTime(end)
                         val rate = hourlyRubles.toLongOrNull()
-                        if (from == null || to == null || from == to || rate == null || rate !in 0..100_000) {
+                        if (from == null || to == null || rate == null || rate !in 0..100_000) {
                             validation = "Проверь время (ЧЧ:ММ) и ставку (0–100000 ₽)."
                         } else {
-                            selectPattern(WorkPattern(on, off), from, to, rate * 100)
+                            if (replaceExisting) {
+                                pending = PatternSelection(WorkPattern(on, off), from, to, rate * 100)
+                            } else {
+                                selectPattern(WorkPattern(on, off), from, to, rate * 100, false)
+                            }
                         }
                     }, modifier = Modifier.fillMaxWidth()) {
                         Text("График $on/$off", color = lime)
@@ -555,4 +582,20 @@ private fun PatternDialog(
         },
         confirmButton = { TextButton(enabled = !disabled, onClick = onDismiss) { Text("Закрыть") } }
     )
+    pending?.let { request ->
+        AlertDialog(
+            onDismissRequest = { if (!disabled) pending = null },
+            title = { Text("Удалить текущий график за 90 дней?") },
+            text = { Text("Все смены и выходные в выбранном периоде будут перезаписаны, включая ручные изменения. Это нельзя отменить без резервной копии.") },
+            confirmButton = {
+                Button(enabled = !disabled, onClick = {
+                    pending = null
+                    selectPattern(request.pattern, request.start, request.end, request.rate, true)
+                }) { Text("Заменить график") }
+            },
+            dismissButton = {
+                TextButton(enabled = !disabled, onClick = { pending = null }) { Text("Отмена") }
+            }
+        )
+    }
 }

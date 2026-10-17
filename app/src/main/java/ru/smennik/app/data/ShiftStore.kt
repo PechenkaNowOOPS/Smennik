@@ -5,31 +5,36 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import ru.smennik.app.domain.DayType
+import ru.smennik.app.domain.ShiftOrigin
 import ru.smennik.app.domain.WorkPattern
 import ru.smennik.app.domain.WorkShift
 import java.time.LocalDate
 
-/** Локальный SQLite-слой. При переходе на Room потребуется явная миграция схемы. */
-class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", null, 1) {
+/** v1 -> v2 is additive; existing entries are conservatively treated as manual edits. */
+class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE shifts (
             date TEXT PRIMARY KEY NOT NULL,
             type TEXT NOT NULL,
             start_minutes INTEGER NOT NULL,
             end_minutes INTEGER NOT NULL,
-            hourly_kopecks INTEGER NOT NULL
+            hourly_kopecks INTEGER NOT NULL,
+            origin TEXT NOT NULL DEFAULT 'MANUAL'
         )""")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Версия 1 не имеет предыдущих схем. Не удалять пользовательские данные.
-        throw IllegalStateException("Нет миграции базы с $oldVersion на $newVersion")
+        if (oldVersion == 1 && newVersion == 2) {
+            db.execSQL("ALTER TABLE shifts ADD COLUMN origin TEXT NOT NULL DEFAULT 'MANUAL'")
+        } else {
+            throw IllegalStateException("Нет безопасной миграции SQLite с $oldVersion на $newVersion")
+        }
     }
 
     fun all(): List<WorkShift> {
         val result = mutableListOf<WorkShift>()
         readableDatabase.query(
-            "shifts", arrayOf("date", "type", "start_minutes", "end_minutes", "hourly_kopecks"),
+            "shifts", arrayOf("date", "type", "start_minutes", "end_minutes", "hourly_kopecks", "origin"),
             null, null, null, null, "date ASC"
         ).use { cursor ->
             while (cursor.moveToNext()) {
@@ -38,7 +43,8 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                     type = DayType.valueOf(cursor.getString(1)),
                     startMinutes = cursor.getInt(2),
                     endMinutes = cursor.getInt(3),
-                    hourlyKopecks = cursor.getLong(4)
+                    hourlyKopecks = cursor.getLong(4),
+                    origin = ShiftOrigin.valueOf(cursor.getString(5))
                 )
             }
         }
@@ -51,17 +57,21 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         put("start_minutes", shift.startMinutes)
         put("end_minutes", shift.endMinutes)
         put("hourly_kopecks", shift.hourlyKopecks)
+        put("origin", shift.origin.name)
     }
 
     fun save(shift: WorkShift) {
-        writableDatabase.insertWithOnConflict("shifts", null, values(shift), SQLiteDatabase.CONFLICT_REPLACE)
+        val id = writableDatabase.insertWithOnConflict(
+            "shifts", null, values(shift.copy(origin = ShiftOrigin.MANUAL)), SQLiteDatabase.CONFLICT_REPLACE
+        )
+        check(id != -1L) { "Не удалось сохранить смену" }
     }
 
     fun remove(date: LocalDate) {
         writableDatabase.delete("shifts", "date = ?", arrayOf(date.toString()))
     }
 
-    /** Replace the complete schedule atomically after a backup has been validated. */
+    /** Import is all-or-nothing, preserving backed up origins (v1 backups default to manual). */
     fun replaceAll(shifts: List<WorkShift>) {
         val db = writableDatabase
         db.beginTransaction()
@@ -69,20 +79,35 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
             db.delete("shifts", null, null)
             shifts.forEach { db.insertOrThrow("shifts", null, values(it)) }
             db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
+        } finally { db.endTransaction() }
     }
 
-    /** Не заменять отредактированные пользователем дни. Даже ручной выходной защищён от генератора. */
-    fun fillPattern(anchor: LocalDate, pattern: WorkPattern, start: Int, end: Int, rate: Long) {
+    /**
+     * Ordinary regeneration replaces ONLY generated days within 90 days.
+     * Explicit replacement removes all records in that range, including manual edits.
+     * Every cycle day is recorded (WORK or OFF), to avoid ghost shifts.
+     */
+    fun fillPattern(
+        anchor: LocalDate,
+        pattern: WorkPattern,
+        start: Int,
+        end: Int,
+        rate: Long,
+        replaceExisting: Boolean = false
+    ) {
         val db = writableDatabase
+        val last = anchor.plusDays(89)
         db.beginTransaction()
         try {
-            for (date in pattern.generatedWorkDays(anchor)) {
+            val where = if (replaceExisting) "date >= ? AND date <= ?" else
+                "date >= ? AND date <= ? AND origin = 'GENERATED'"
+            db.delete("shifts", where, arrayOf(anchor.toString(), last.toString()))
+            for (i in 0 until 90) {
+                val date = anchor.plusDays(i.toLong())
+                val kind = if (pattern.isWorkDay(anchor, date)) DayType.WORK else DayType.OFF
                 db.insertWithOnConflict(
                     "shifts", null,
-                    values(WorkShift(date, DayType.WORK, start, end, rate)),
+                    values(WorkShift(date, kind, start, end, rate, ShiftOrigin.GENERATED)),
                     SQLiteDatabase.CONFLICT_IGNORE
                 )
             }
