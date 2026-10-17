@@ -58,6 +58,7 @@ fun SmennikApp(
     onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean, Long) -> Result<Unit>,
     onCustomPattern: suspend (LocalDate, String, Int, Int, Long, Boolean, Long) -> Result<Unit>,
     onAddWorkplace: suspend (String, Long) -> Result<Unit>,
+    onUpdatePayRules: suspend (Long, Int, Int, Int) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
     onImportBackup: suspend (Uri) -> Result<Int>,
     onStartWork: suspend (LocalDate, Long, Long) -> Result<Unit>,
@@ -167,6 +168,7 @@ fun SmennikApp(
                         shifts = shiftsOfJob,
                         sessions = sessionsOfJob,
                         payments = paymentsOfJob,
+                        workplace = selectedWorkplace,
                         isBusy = state.isBusy,
                         defaultRate = selectedWorkplace.hourlyKopecks,
                         activeElsewhere = state.sessions.any { it.isRunning && it.workplaceId != selectedId },
@@ -198,12 +200,16 @@ fun SmennikApp(
                         onPayment = { day, amount, kind ->
                             launchOperation { onPayment(day, amount, kind, selectedId) }
                         },
-                        onRemovePayment = { id -> launchOperation { onRemovePayment(id) } }
+                        onRemovePayment = { id -> launchOperation { onRemovePayment(id) } },
+                        onUpdateRules = { night, extra, limit ->
+                            onUpdatePayRules(selectedId, night, extra, limit)
+                        }
                     )
                     else -> StatisticsScreen(
                         shifts = shiftsOfJob,
                         sessions = sessionsOfJob,
-                        payments = paymentsOfJob
+                        payments = paymentsOfJob,
+                        workplace = selectedWorkplace
                     )
                 }
             }
@@ -333,6 +339,7 @@ private fun AddWorkplaceDialog(
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.4.0", "Настройка ночных доплат и переработок, премии, удержания, подробный расчёт зарплаты."),
     VersionNote("0.3.0", "Несколько мест работы, индивидуальные графики и свои повторяющиеся циклы."),
     VersionNote("0.2.0", "Фактическое время смен, паузы, финансы, выплаты, статистика и резервное копирование v3."),
     VersionNote("0.1.6", "Экран «О приложении», история обновлений и проверка совместимости подписанных APK."),
@@ -721,16 +728,19 @@ private fun FinanceScreen(
     shifts: List<WorkShift>,
     sessions: List<WorkSession>,
     payments: List<WagePayment>,
+    workplace: Workplace,
     isBusy: Boolean,
     onPayment: (LocalDate, Long, PaymentType) -> Unit,
-    onRemovePayment: (Long) -> Unit
+    onRemovePayment: (Long) -> Unit,
+    onUpdateRules: suspend (Int, Int, Int) -> Result<Unit>
 ) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     var addDialog by remember { mutableStateOf(false) }
+    var rulesDialog by remember { mutableStateOf(false) }
     var removeDialog by remember { mutableStateOf<WagePayment?>(null) }
     val now = System.currentTimeMillis()
     val planned = monthlySummary(shifts, month)
-    val actual = actualMonthSummary(sessions, payments, month, now)
+    val actual = actualMonthSummary(sessions, payments, month, now, workplace)
     val monthPayments = payments.filter { YearMonth.from(it.date) == month }
 
     Column(
@@ -742,10 +752,23 @@ private fun FinanceScreen(
         MonthSelector(month, onPrev = { month = month.minusMonths(1) },
             onNext = { month = month.plusMonths(1) })
         MoneyCard("Плановый доход", rubles(planned.projectedKopecks))
-        MoneyCard("Фактически заработано", rubles(actual.earnedKopecks), highlighted = true)
+        MoneyCard("Основное начисление", rubles(actual.baseKopecks))
+        MoneyCard("Ночные часы (22:00–06:00)", rubles(actual.nightBonusKopecks),
+            hint = "${actual.nightMinutes} мин · надбавка ${workplace.nightBonusPercent}%")
+        MoneyCard("Переработка", rubles(actual.overtimeBonusKopecks),
+            hint = "${actual.overtimeMinutes} мин · сверх ${workplace.overtimeAfterMinutes / 60} ч " +
+                "${workplace.overtimeAfterMinutes % 60} мин за смену · +${workplace.overtimeBonusPercent}%")
+        MoneyCard("Премии", rubles(actual.manualBonusesKopecks))
+        MoneyCard("Удержания", rubles(actual.deductionsKopecks))
+        MoneyCard("Фактически начислено", rubles(actual.earnedKopecks), highlighted = true)
         MoneyCard("Получено выплат", rubles(actual.paidKopecks))
         MoneyCard("Расчётный остаток", rubles(actual.outstandingKopecks),
-            hint = "По учтённым сменам и выплатам за выбранный месяц; без налогов и надбавок.")
+            hint = "Оценка, а не расчётный лист. Налогов нет, время перерывов для ночных " +
+                "часов распределено пропорционально по смене.")
+        OutlinedButton(
+            onClick = { rulesDialog = true }, enabled = !isBusy,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("⚙ Настроить доплаты", color = lime) }
         Button(
             onClick = { addDialog = true }, enabled = !isBusy, modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
@@ -757,8 +780,12 @@ private fun FinanceScreen(
                 Row(Modifier.fillMaxWidth().padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(if (entry.type == PaymentType.ADVANCE) "Аванс" else "Зарплата",
-                            fontWeight = FontWeight.Bold)
+                        Text(when(entry.type) {
+                            PaymentType.ADVANCE -> "Аванс"
+                            PaymentType.SALARY -> "Зарплата"
+                            PaymentType.BONUS -> "Премия"
+                            PaymentType.DEDUCTION -> "Удержание"
+                        }, fontWeight = FontWeight.Bold)
                         Text(entry.date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy")), color = textMuted)
                     }
                     Text(rubles(entry.amountKopecks), color = lime)
@@ -769,6 +796,14 @@ private fun FinanceScreen(
             }
         }
         Spacer(Modifier.height(16.dp))
+    }
+    if (rulesDialog) {
+        PayRulesDialog(
+            workplace = workplace,
+            isBusy = isBusy,
+            onDismiss = { rulesDialog = false },
+            onSave = onUpdateRules
+        )
     }
     if (addDialog) {
         var rublesInput by remember { mutableStateOf("") }
@@ -786,12 +821,17 @@ private fun FinanceScreen(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                     OutlinedTextField(value = dateText, onValueChange = { dateText = it },
                         label = { Text("Дата ГГГГ-ММ-ДД") }, singleLine = true)
-                    Row {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         FilterChip(selected = type == PaymentType.ADVANCE,
                             onClick = { type = PaymentType.ADVANCE }, label = { Text("Аванс") })
-                        Spacer(Modifier.width(8.dp))
                         FilterChip(selected = type == PaymentType.SALARY,
                             onClick = { type = PaymentType.SALARY }, label = { Text("Зарплата") })
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = type == PaymentType.BONUS,
+                            onClick = { type = PaymentType.BONUS }, label = { Text("Премия") })
+                        FilterChip(selected = type == PaymentType.DEDUCTION,
+                            onClick = { type = PaymentType.DEDUCTION }, label = { Text("Удержание") })
                     }
                     if (error.isNotEmpty()) Text(error, color = Color(0xFFFF8585))
                 }
@@ -831,11 +871,12 @@ private fun FinanceScreen(
 
 @Composable
 private fun StatisticsScreen(
-    shifts: List<WorkShift>, sessions: List<WorkSession>, payments: List<WagePayment>
+    shifts: List<WorkShift>, sessions: List<WorkSession>,
+    payments: List<WagePayment>, workplace: Workplace
 ) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     val plan = monthlySummary(shifts, month)
-    val actual = actualMonthSummary(sessions, payments, month, System.currentTimeMillis())
+    val actual = actualMonthSummary(sessions, payments, month, System.currentTimeMillis(), workplace)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(8.dp))
@@ -850,7 +891,12 @@ private fun StatisticsScreen(
         if (actual.activeSessions > 0) MoneyCard("Идёт сейчас", "${actual.activeSessions}")
         Text("Заработок", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
         MoneyCard("План", rubles(plan.projectedKopecks))
-        MoneyCard("Факт", rubles(actual.earnedKopecks), highlighted = true)
+        MoneyCard("Основная ставка", rubles(actual.baseKopecks))
+        MoneyCard("Ночные доплаты", rubles(actual.nightBonusKopecks))
+        MoneyCard("Переработки", rubles(actual.overtimeBonusKopecks))
+        MoneyCard("Премии", rubles(actual.manualBonusesKopecks))
+        MoneyCard("Удержания", rubles(actual.deductionsKopecks))
+        MoneyCard("Итого начислено", rubles(actual.earnedKopecks), highlighted = true)
         Text(
             "Фактическое время считается по запускам и завершениям таймера; перерывы исключаются. " +
                 "Ночные смены учитываются по дате их начала.",
@@ -869,6 +915,89 @@ private fun MonthSelector(month: YearMonth, onPrev: () -> Unit, onNext: () -> Un
             fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         TextButton(onClick = onNext) { Text("›", color = lime, fontSize = 28.sp) }
     }
+}
+
+
+@Composable
+private fun PayRulesDialog(
+    workplace: Workplace,
+    isBusy: Boolean,
+    onDismiss: () -> Unit,
+    onSave: suspend (Int, Int, Int) -> Result<Unit>
+) {
+    var night by remember(workplace.id) { mutableStateOf(workplace.nightBonusPercent.toString()) }
+    var overtime by remember(workplace.id) { mutableStateOf(workplace.overtimeBonusPercent.toString()) }
+    var afterHours by remember(workplace.id) {
+        mutableStateOf(workplace.overtimeAfterMinutes.div(60).toString())
+    }
+    var error by remember(workplace.id) { mutableStateOf("") }
+    var saving by remember(workplace.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = { if (!saving && !isBusy) onDismiss() },
+        title = { Text("Правила начислений") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Место работы: ${workplace.name}", fontWeight = FontWeight.Bold)
+                OutlinedTextField(
+                    value = night,
+                    onValueChange = { if (it.all(Char::isDigit)) night = it.take(3) },
+                    label = { Text("Ночная надбавка, %") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    value = overtime,
+                    onValueChange = { if (it.all(Char::isDigit)) overtime = it.take(3) },
+                    label = { Text("Надбавка за переработку, %") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    value = afterHours,
+                    onValueChange = { if (it.all(Char::isDigit)) afterHours = it.take(2) },
+                    label = { Text("Переработка после, часов за смену") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                Text(
+                    "Ночь: с 22:00 до 06:00. Надбавки суммируются. Паузы в ночное время " +
+                        "оцениваются пропорционально общей длительности перерывов. " +
+                        "Проверьте правила вашего договора; по умолчанию 0%.",
+                    color = textMuted, fontSize = 12.sp
+                )
+                if (error.isNotEmpty()) Text(error, color = Color(0xFFFF8585), fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            Button(enabled = !saving && !isBusy, onClick = {
+                val n = night.toIntOrNull()
+                val o = overtime.toIntOrNull()
+                val h = afterHours.toIntOrNull()
+                if (n == null || o == null || h == null ||
+                    n !in 0..200 || o !in 0..200 || h !in 1..24) {
+                    error = "Доплаты должны быть от 0 до 200%, а порог — от 1 до 24 часов."
+                } else {
+                    saving = true
+                    scope.launch {
+                        onSave(n, o, h * 60).fold(
+                            onSuccess = { onDismiss() },
+                            onFailure = {
+                                error = "Не удалось сохранить: ${it.message ?: "ошибка базы данных"}"
+                                saving = false
+                            }
+                        )
+                    }
+                }
+            }) { Text("Сохранить") }
+        },
+        dismissButton = {
+            TextButton(enabled = !saving && !isBusy, onClick = onDismiss) { Text("Отмена") }
+        }
+    )
 }
 
 @Composable

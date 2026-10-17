@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
                 onPattern = model::generate,
                 onCustomPattern = model::generateCustom,
                 onAddWorkplace = model::addWorkplace,
+                onUpdatePayRules = model::updatePayRules,
                 onExportBackup = model::exportBackup,
                 onImportBackup = model::importBackup,
                 onStartWork = model::startWork,
