@@ -15,11 +15,13 @@ data class WorkShift(
     val startMinutes: Int = 8 * 60,
     val endMinutes: Int = 20 * 60,
     val hourlyKopecks: Long = 35_000L,
-    val origin: ShiftOrigin = ShiftOrigin.MANUAL
+    val origin: ShiftOrigin = ShiftOrigin.MANUAL,
+    val workplaceId: Long = 1
 ) {
     init {
         require(startMinutes in 0..1439 && endMinutes in 0..1439)
         require(hourlyKopecks in 0..10_000_000L)
+        require(workplaceId > 0)
     }
 
     /** Matching clock times mean a full 24-hour shift, not a zero-duration shift. */

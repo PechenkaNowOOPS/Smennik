@@ -13,10 +13,11 @@ data class WorkSession(
     val endedMs: Long? = null,
     val pauseStartedMs: Long? = null,
     val totalPausedMs: Long = 0,
-    val hourlyKopecks: Long = 35_000L
+    val hourlyKopecks: Long = 35_000L,
+    val workplaceId: Long = 1
 ) {
     init {
-        require(id >= 0)
+        require(id >= 0 && workplaceId > 0)
         require(startedMs > 0)
         require(endedMs == null || endedMs >= startedMs)
         require(pauseStartedMs == null || (endedMs == null && pauseStartedMs >= startedMs))
@@ -42,9 +43,10 @@ data class WagePayment(
     val id: Long,
     val date: LocalDate,
     val amountKopecks: Long,
-    val type: PaymentType
+    val type: PaymentType,
+    val workplaceId: Long = 1
 ) {
-    init { require(id >= 0 && amountKopecks in 1..100_000_000_00L) }
+    init { require(id >= 0 && workplaceId > 0 && amountKopecks in 1..100_000_000_00L) }
 }
 
 /** Earnings and payments are attributed to their start/payment date, not split at midnight. */
