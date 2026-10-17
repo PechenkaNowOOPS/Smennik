@@ -61,6 +61,19 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         writableDatabase.delete("shifts", "date = ?", arrayOf(date.toString()))
     }
 
+    /** Replace the complete schedule atomically after a backup has been validated. */
+    fun replaceAll(shifts: List<WorkShift>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("shifts", null, null)
+            shifts.forEach { db.insertOrThrow("shifts", null, values(it)) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     /** Не заменять отредактированные пользователем дни. Даже ручной выходной защищён от генератора. */
     fun fillPattern(anchor: LocalDate, pattern: WorkPattern, start: Int, end: Int, rate: Long) {
         val db = writableDatabase

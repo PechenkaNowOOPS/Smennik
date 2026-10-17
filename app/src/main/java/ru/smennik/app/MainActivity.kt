@@ -14,9 +14,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val model: ShiftViewModel = viewModel()
-            val shifts by model.shifts.collectAsState()
-            val error by model.error.collectAsState()
-            SmennikApp(shifts, error, model::save, model::remove, model::generate)
+            val state by model.uiState.collectAsState()
+            SmennikApp(
+                state = state,
+                onRetryLoad = model::reload,
+                onSave = model::save,
+                onRemove = model::remove,
+                onPattern = model::generate,
+                onExportBackup = model::exportBackup,
+                onImportBackup = model::importBackup
+            )
         }
     }
 }

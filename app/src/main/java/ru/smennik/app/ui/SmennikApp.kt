@@ -1,5 +1,8 @@
 package ru.smennik.app.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -9,13 +12,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import ru.smennik.app.data.ShiftUiState
 import ru.smennik.app.domain.*
 import java.text.NumberFormat
 import java.time.LocalDate
@@ -37,16 +45,40 @@ private fun rubles(kopecks: Long): String =
 
 @Composable
 fun SmennikApp(
-    shifts: List<WorkShift>,
-    error: String?,
-    onSave: (WorkShift) -> Unit,
-    onRemove: (LocalDate) -> Unit,
-    onPattern: (LocalDate, WorkPattern) -> Unit
+    state: ShiftUiState,
+    onRetryLoad: () -> Unit,
+    onSave: suspend (WorkShift) -> Result<Unit>,
+    onRemove: suspend (LocalDate) -> Result<Unit>,
+    onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long) -> Result<Unit>,
+    onExportBackup: suspend (Uri) -> Result<Unit>,
+    onImportBackup: suspend (Uri) -> Result<Int>
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<LocalDate?>(null) }
     var showPatterns by remember { mutableStateOf(false) }
     var patternAnchor by remember { mutableStateOf(LocalDate.now()) }
+    var restoreUri by remember { mutableStateOf<Uri?>(null) }
+    var restoreError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) scope.launch {
+            onExportBackup(uri).fold(
+                onSuccess = { snackbarHostState.showSnackbar("Резервная копия сохранена.") },
+                onFailure = { snackbarHostState.showSnackbar("Не удалось сохранить копию: ${it.message ?: "ошибка файла"}") }
+            )
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            restoreUri = uri
+            restoreError = null
+        }
+    }
 
     MaterialTheme(colorScheme = darkColorScheme(
         primary = lime, onPrimary = graphite,
@@ -56,6 +88,7 @@ fun SmennikApp(
     )) {
         Scaffold(
             containerColor = graphite,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 NavigationBar(containerColor = surface) {
                     listOf("Главная", "Календарь").forEachIndexed { index, title ->
@@ -75,47 +108,113 @@ fun SmennikApp(
             }
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
-                if (error != null) Text(
-                    text = error, color = Color(0xFFFF8585),
-                    modifier = Modifier.fillMaxWidth().padding(12.dp)
-                )
-                if (tab == 0) HomeScreen(
-                    shifts = shifts,
-                    onEdit = { editing = it },
-                    onCalendar = { tab = 1 },
-                    onPattern = { patternAnchor = LocalDate.now(); showPatterns = true }
-                ) else CalendarScreen(
-                    shifts = shifts,
-                    onEdit = { editing = it },
-                    onPattern = { day -> patternAnchor = day; showPatterns = true }
-                )
+                when {
+                    state.isLoading -> LoadingScreen()
+                    state.loadingError != null -> LoadErrorScreen(state.loadingError, onRetryLoad)
+                    tab == 0 -> HomeScreen(
+                        shifts = state.shifts,
+                        isBusy = state.isBusy,
+                        onEdit = { editing = it },
+                        onCalendar = { tab = 1 },
+                        onPattern = { patternAnchor = LocalDate.now(); showPatterns = true },
+                        onExport = {
+                            exportLauncher.launch("smennik-backup-${LocalDate.now()}.json")
+                        },
+                        onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) }
+                    )
+                    else -> CalendarScreen(
+                        shifts = state.shifts,
+                        onEdit = { editing = it },
+                        onPattern = { day -> patternAnchor = day; showPatterns = true }
+                    )
+                }
             }
         }
         editing?.let { date ->
             EditShiftDialog(
-                date, shifts.firstOrNull { it.date == date },
+                date, state.shifts.firstOrNull { it.date == date }, state.isBusy,
                 onDismiss = { editing = null },
-                onSave = { onSave(it); editing = null },
-                onRemove = { onRemove(date); editing = null }
+                onSave = onSave,
+                onRemove = { onRemove(date) }
             )
         }
         if (showPatterns) PatternDialog(
             anchor = patternAnchor,
+            isBusy = state.isBusy,
             onDismiss = { showPatterns = false },
-            onSelect = { pattern -> onPattern(patternAnchor, pattern); showPatterns = false }
+            onSelect = { pattern, start, end, rate -> onPattern(patternAnchor, pattern, start, end, rate) }
         )
+        restoreUri?.let { uri ->
+            AlertDialog(
+                onDismissRequest = { if (!state.isBusy) restoreUri = null },
+                title = { Text("Восстановить график?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Импорт заменит текущие записи графика данными из резервной копии.")
+                        Text("Файл будет проверен перед изменением данных. Это действие нельзя отменить.", color = textMuted)
+                        restoreError?.let { Text(it, color = Color(0xFFFF8585)) }
+                    }
+                },
+                confirmButton = {
+                    Button(enabled = !state.isBusy, onClick = {
+                        scope.launch {
+                            onImportBackup(uri).fold(
+                                onSuccess = { count ->
+                                    restoreUri = null
+                                    snackbarHostState.showSnackbar("График восстановлен. Записей: $count.")
+                                },
+                                onFailure = { restoreError = "Не удалось восстановить копию: ${it.message ?: "ошибка файла"}" }
+                            )
+                        }
+                    }) { Text(if (state.isBusy) "Восстановление…" else "Восстановить") }
+                },
+                dismissButton = {
+                    TextButton(enabled = !state.isBusy, onClick = { restoreUri = null }) { Text("Отмена") }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoadingScreen() {
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        CircularProgressIndicator(color = lime)
+        Spacer(Modifier.height(14.dp))
+        Text("Загружаю график…", color = textMuted)
+    }
+}
+
+@Composable
+private fun LoadErrorScreen(message: String, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Не удалось открыть график", color = Color(0xFFFF8585), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(message, color = textMuted, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)) {
+            Text("Повторить")
+        }
     }
 }
 
 @Composable
 private fun HomeScreen(
     shifts: List<WorkShift>,
+    isBusy: Boolean,
     onEdit: (LocalDate) -> Unit,
     onCalendar: () -> Unit,
-    onPattern: () -> Unit
+    onPattern: () -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit
 ) {
     val today = LocalDate.now()
-    val currentShift = shifts.firstOrNull { it.date == today && it.type == DayType.WORK }
+    val todayEntry = shifts.firstOrNull { it.date == today }
+    val currentShift = todayEntry?.takeIf { it.type == DayType.WORK }
     val nextShift = shifts.filter { !it.date.isBefore(today) && it.type == DayType.WORK }
         .minByOrNull { it.date }
     val summary = monthlySummary(shifts, YearMonth.from(today))
@@ -131,13 +230,21 @@ private fun HomeScreen(
 
         Card(colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.fillMaxWidth().padding(24.dp)) {
-                Text(if (currentShift != null) "●  СЕГОДНЯ РАБОТА" else "●  СЕГОДНЯ ВЫХОДНОЙ",
+                Text(
+                    when {
+                        currentShift != null -> "●  СЕГОДНЯ РАБОТА"
+                        todayEntry?.type == DayType.OFF -> "●  СЕГОДНЯ ВЫХОДНОЙ"
+                        else -> "●  ГРАФИК НЕ ЗАДАН"
+                    },
                     color = if (currentShift != null) lime else textMuted,
                     fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 Spacer(Modifier.height(18.dp))
                 Text(
-                    if (currentShift == null) "Свободный день" else
-                        "${displayTime(currentShift.startMinutes)} — ${displayTime(currentShift.endMinutes)}",
+                    when {
+                        currentShift != null -> "${displayTime(currentShift.startMinutes)} — ${displayTime(currentShift.endMinutes)}"
+                        todayEntry?.type == DayType.OFF -> "Свободный день"
+                        else -> "Нет записи на сегодня"
+                    },
                     fontSize = 26.sp, fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(10.dp))
@@ -176,6 +283,23 @@ private fun HomeScreen(
         Spacer(Modifier.height(20.dp))
         OutlinedButton(onClick = onPattern, modifier = Modifier.fillMaxWidth(), border = BorderStroke(1.dp, lime)) {
             Text("⚡ Создать график 2/2, 3/3…", color = lime)
+        }
+        Spacer(Modifier.height(12.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("Резервная копия", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("Сохрани график в файл или восстанови его на этом устройстве.", color = textMuted, fontSize = 13.sp)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onExport, enabled = !isBusy, modifier = Modifier.weight(1f)) {
+                        Text("Экспорт JSON", color = lime)
+                    }
+                    OutlinedButton(onClick = onImport, enabled = !isBusy, modifier = Modifier.weight(1f)) {
+                        Text("Импорт JSON", color = lime)
+                    }
+                }
+            }
         }
         TextButton(onClick = onCalendar, modifier = Modifier.fillMaxWidth()) {
             Text("Открыть календарь →", color = Color.White)
@@ -281,17 +405,52 @@ private fun CalendarScreen(
 private fun EditShiftDialog(
     date: LocalDate,
     old: WorkShift?,
+    isBusy: Boolean,
     onDismiss: () -> Unit,
-    onSave: (WorkShift) -> Unit,
-    onRemove: () -> Unit
+    onSave: suspend (WorkShift) -> Result<Unit>,
+    onRemove: suspend () -> Result<Unit>
 ) {
+    val scope = rememberCoroutineScope()
     var start by remember(date, old) { mutableStateOf(displayTime(old?.startMinutes ?: 480)) }
     var end by remember(date, old) { mutableStateOf(displayTime(old?.endMinutes ?: 1200)) }
     var hourlyRubles by remember(date, old) { mutableStateOf(((old?.hourlyKopecks ?: 35_000L) / 100).toString()) }
     var validation by remember(date) { mutableStateOf("") }
+    var operationError by remember(date) { mutableStateOf("") }
+    var saving by remember(date) { mutableStateOf(false) }
+    val disabled = isBusy || saving
+
+    fun submit(shift: WorkShift) {
+        if (disabled) return
+        saving = true
+        operationError = ""
+        scope.launch {
+            onSave(shift).fold(
+                onSuccess = { onDismiss() },
+                onFailure = {
+                    operationError = "Не удалось сохранить: ${it.message ?: "ошибка базы данных"}"
+                    saving = false
+                }
+            )
+        }
+    }
+
+    fun clearDay() {
+        if (disabled) return
+        saving = true
+        operationError = ""
+        scope.launch {
+            onRemove().fold(
+                onSuccess = { onDismiss() },
+                onFailure = {
+                    operationError = "Не удалось удалить запись: ${it.message ?: "ошибка базы данных"}"
+                    saving = false
+                }
+            )
+        }
+    }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!disabled) onDismiss() },
         title = { Text(date.format(dayFormatter).replaceFirstChar { it.uppercase(russian) }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -301,41 +460,99 @@ private fun EditShiftDialog(
                 OutlinedTextField(value = hourlyRubles, onValueChange = { hourlyRubles = it }, label = { Text("Ставка, ₽/час") }, singleLine = true)
                 Text("Ночная смена: окончание раньше начала означает следующий день.", fontSize = 12.sp, color = textMuted)
                 if (validation.isNotEmpty()) Text(validation, color = Color(0xFFFF8585), fontSize = 13.sp)
-                OutlinedButton(onClick = { onSave(WorkShift(date, DayType.OFF)) }, modifier = Modifier.fillMaxWidth()) {
+                if (operationError.isNotEmpty()) Text(operationError, color = Color(0xFFFF8585), fontSize = 13.sp)
+                OutlinedButton(enabled = !disabled, onClick = { submit(WorkShift(date, DayType.OFF)) }, modifier = Modifier.fillMaxWidth()) {
                     Text("Отметить выходной")
                 }
-                if (old != null) TextButton(onClick = onRemove) { Text("Очистить день", color = Color(0xFFFF8585)) }
+                if (old != null) TextButton(enabled = !disabled, onClick = ::clearDay) {
+                    Text("Очистить день", color = Color(0xFFFF8585))
+                }
             }
         },
         confirmButton = {
-            Button(onClick = {
+            Button(enabled = !disabled, onClick = {
                 val from = parseTime(start)
                 val to = parseTime(end)
                 val rate = hourlyRubles.toLongOrNull()
                 if (from == null || to == null || from == to || rate == null || rate !in 0..100_000) {
                     validation = "Проверь время (ЧЧ:ММ) и ставку (0–100000 ₽)."
-                } else onSave(WorkShift(date, DayType.WORK, from, to, rate * 100))
-            }) { Text("Сохранить") }
+                } else submit(WorkShift(date, DayType.WORK, from, to, rate * 100))
+            }) { Text(if (saving) "Сохраняю…" else "Сохранить") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+        dismissButton = { TextButton(enabled = !disabled, onClick = onDismiss) { Text("Отмена") } }
     )
 }
 
 @Composable
-private fun PatternDialog(anchor: LocalDate, onDismiss: () -> Unit, onSelect: (WorkPattern) -> Unit) {
+private fun PatternDialog(
+    anchor: LocalDate,
+    isBusy: Boolean,
+    onDismiss: () -> Unit,
+    onSelect: suspend (WorkPattern, Int, Int, Long) -> Result<Unit>
+) {
+    val scope = rememberCoroutineScope()
+    var start by remember(anchor) { mutableStateOf("08:00") }
+    var end by remember(anchor) { mutableStateOf("20:00") }
+    var hourlyRubles by remember(anchor) { mutableStateOf("350") }
+    var validation by remember(anchor) { mutableStateOf("") }
+    var saving by remember(anchor) { mutableStateOf(false) }
+    val disabled = isBusy || saving
+
+    fun selectPattern(pattern: WorkPattern, from: Int, to: Int, rate: Long) {
+        if (disabled) return
+        saving = true
+        validation = ""
+        scope.launch {
+            onSelect(pattern, from, to, rate).fold(
+                onSuccess = { onDismiss() },
+                onFailure = {
+                    validation = "Не удалось создать график: ${it.message ?: "ошибка базы данных"}"
+                    saving = false
+                }
+            )
+        }
+    }
+
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!disabled) onDismiss() },
         title = { Text("Создать рабочий график") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Text("От ${anchor.format(dayFormatter)}. Первый день — рабочий. Заполняются 90 дней, существующие записи не меняются.", color = textMuted)
+                OutlinedTextField(
+                    value = start, onValueChange = { start = it },
+                    label = { Text("Начало смены, ЧЧ:ММ") }, singleLine = true
+                )
+                OutlinedTextField(
+                    value = end, onValueChange = { end = it },
+                    label = { Text("Окончание смены, ЧЧ:ММ") }, singleLine = true
+                )
+                OutlinedTextField(
+                    value = hourlyRubles,
+                    onValueChange = { value -> if (value.all { it.isDigit() }) hourlyRubles = value },
+                    label = { Text("Ставка, ₽/час") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                if (validation.isNotEmpty()) Text(validation, color = Color(0xFFFF8585), fontSize = 13.sp)
                 listOf(2 to 2, 3 to 3, 5 to 2, 1 to 3, 4 to 2).forEach { (on, off) ->
-                    OutlinedButton(onClick = { onSelect(WorkPattern(on, off)) }, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(enabled = !disabled, onClick = {
+                        val from = parseTime(start)
+                        val to = parseTime(end)
+                        val rate = hourlyRubles.toLongOrNull()
+                        if (from == null || to == null || from == to || rate == null || rate !in 0..100_000) {
+                            validation = "Проверь время (ЧЧ:ММ) и ставку (0–100000 ₽)."
+                        } else {
+                            selectPattern(WorkPattern(on, off), from, to, rate * 100)
+                        }
+                    }, modifier = Modifier.fillMaxWidth()) {
                         Text("График $on/$off", color = lime)
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } }
+        confirmButton = { TextButton(enabled = !disabled, onClick = onDismiss) { Text("Закрыть") } }
     )
 }
