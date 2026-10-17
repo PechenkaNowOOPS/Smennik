@@ -16,7 +16,7 @@ import java.time.LocalDate
 object ShiftBackup {
     const val MAX_BYTES = 5 * 1024 * 1024
     private const val FORMAT = "ru.smennik.backup"
-    private const val VERSION = 4
+    private const val VERSION = 5
     private const val MAX_SHIFTS = 100_000
 
     data class Snapshot(
@@ -79,7 +79,10 @@ object ShiftBackup {
         val workplaceEntries = JSONArray()
         workplaces.sortedBy { it.id }.forEach { w ->
             workplaceEntries.put(JSONObject()
-                .put("id",w.id).put("name",w.name).put("hourlyKopecks",w.hourlyKopecks))
+                .put("id",w.id).put("name",w.name).put("hourlyKopecks",w.hourlyKopecks)
+                .put("nightBonusPercent",w.nightBonusPercent)
+                .put("overtimeBonusPercent",w.overtimeBonusPercent)
+                .put("overtimeAfterMinutes",w.overtimeAfterMinutes))
         }
         val payload = JSONObject()
             .put("version", VERSION)
@@ -121,7 +124,10 @@ object ShiftBackup {
             require(items.length() in 1..300) { "Неверное количество мест работы." }
             val result = List(items.length()) { index ->
                 val w = items.getJSONObject(index)
-                Workplace(w.getLong("id"),w.getString("name"),w.getLong("hourlyKopecks"))
+                Workplace(w.getLong("id"), w.getString("name"), w.getLong("hourlyKopecks"),
+                    nightBonusPercent = if (fileVersion >= 5) w.getInt("nightBonusPercent") else 0,
+                    overtimeBonusPercent = if (fileVersion >= 5) w.getInt("overtimeBonusPercent") else 0,
+                    overtimeAfterMinutes = if (fileVersion >= 5) w.getInt("overtimeAfterMinutes") else 480)
             }
             require(result.any { it.id == 1L } && result.map { it.id }.toSet().size == result.size)
             result

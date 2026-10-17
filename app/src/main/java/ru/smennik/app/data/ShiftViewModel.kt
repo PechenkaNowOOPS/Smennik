@@ -113,6 +113,10 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun addWorkplace(name: String, hourlyKopecks: Long): Result<Unit> =
         mutate { store.addWorkplace(name, hourlyKopecks) }
 
+    suspend fun updatePayRules(id: Long, nightPercent: Int, overtimePercent: Int,
+                               overtimeAfterMinutes: Int): Result<Unit> =
+        mutate { store.updatePayRules(id, nightPercent, overtimePercent, overtimeAfterMinutes) }
+
     suspend fun save(shift: WorkShift): Result<Unit> = mutate { store.save(shift) }
     suspend fun remove(date: LocalDate, workplaceId: Long = 1): Result<Unit> =
         mutate { store.remove(date, workplaceId) }
