@@ -62,6 +62,7 @@ fun SmennikApp(
     var patternAnchor by remember { mutableStateOf(LocalDate.now()) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
     var restoreError by remember { mutableStateOf<String?>(null) }
+    var showAbout by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val exportLauncher = rememberLauncherForActivityResult(
@@ -119,6 +120,7 @@ fun SmennikApp(
                         isBusy = state.isBusy,
                         onEdit = { editing = it },
                         onCalendar = { tab = 1 },
+                        onAbout = { showAbout = true },
                         onPattern = { patternAnchor = LocalDate.now(); showPatterns = true },
                         onExport = {
                             exportLauncher.launch("smennik-backup-${LocalDate.now()}.json")
@@ -147,6 +149,9 @@ fun SmennikApp(
             onDismiss = { showPatterns = false },
             onSelect = { pattern, start, end, rate, replace -> onPattern(patternAnchor, pattern, start, end, rate, replace) }
         )
+        if (showAbout) {
+            AboutDialog(onDismiss = { showAbout = false })
+        }
         restoreUri?.let { uri ->
             AlertDialog(
                 onDismissRequest = { if (!state.isBusy) restoreUri = null },
@@ -177,6 +182,63 @@ fun SmennikApp(
             )
         }
     }
+}
+
+
+private data class VersionNote(val name: String, val notes: String)
+
+private val versionHistory = listOf(
+    VersionNote("0.1.6", "Экран «О приложении», история обновлений и проверка совместимости подписанных APK."),
+    VersionNote("0.1.5", "Единая нумерация версий и отображение номера сборки."),
+    VersionNote("0.1.4", "Подготовка постоянной цифровой подписи релизных APK."),
+    VersionNote("0.1.3", "Фирменная иконка на рабочем столе Android."),
+    VersionNote("0.1.2", "Исправлены ночные и суточные смены, график 5/2, безопасная перегенерация."),
+    VersionNote("0.1.1", "JSON-резервные копии, обработка ошибок сохранения и настройки графиков."),
+    VersionNote("0.1.0", "Первый Android-прототип: календарь, смены и прогноз заработка.")
+)
+
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("О приложении", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("СМЕННИК", color = lime, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Text(
+                    "Версия ${BuildConfig.VERSION_NAME} · сборка ${BuildConfig.VERSION_CODE}",
+                    fontWeight = FontWeight.SemiBold, fontSize = 17.sp
+                )
+                Text(
+                    "Офлайн-планировщик рабочих смен. Данные хранятся на телефоне.",
+                    color = textMuted, fontSize = 13.sp
+                )
+                HorizontalDivider(color = Color(0xFF34404A))
+                Text("История обновлений", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                versionHistory.forEach { entry ->
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("v${entry.name}", color = lime, fontWeight = FontWeight.Bold)
+                        Text(entry.notes, fontSize = 13.sp)
+                    }
+                }
+                HorizontalDivider(color = Color(0xFF34404A))
+                Text(
+                    "Перед переустановкой приложения сохраните JSON-копию графика. " +
+                        "Обновления поверх предыдущих версий требуют одинакового сертификата подписи.",
+                    color = textMuted, fontSize = 12.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
+            ) { Text("Готово") }
+        }
+    )
 }
 
 @Composable
@@ -211,6 +273,7 @@ private fun HomeScreen(
     isBusy: Boolean,
     onEdit: (LocalDate) -> Unit,
     onCalendar: () -> Unit,
+    onAbout: () -> Unit,
     onPattern: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit
@@ -316,6 +379,9 @@ private fun HomeScreen(
         }
         TextButton(onClick = onCalendar, modifier = Modifier.fillMaxWidth()) {
             Text("Открыть календарь →", color = Color.White)
+        }
+        TextButton(onClick = onAbout, modifier = Modifier.fillMaxWidth()) {
+            Text("О приложении · История версий", color = lime)
         }
         Text(
             "Версия ${BuildConfig.VERSION_NAME} · сборка ${BuildConfig.VERSION_CODE}",
