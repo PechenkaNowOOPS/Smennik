@@ -168,7 +168,6 @@ fun SmennikApp(
                         shifts = shiftsOfJob,
                         sessions = sessionsOfJob,
                         payments = paymentsOfJob,
-                        workplace = selectedWorkplace,
                         isBusy = state.isBusy,
                         defaultRate = selectedWorkplace.hourlyKopecks,
                         activeElsewhere = state.sessions.any { it.isRunning && it.workplaceId != selectedId },
@@ -196,6 +195,7 @@ fun SmennikApp(
                         shifts = shiftsOfJob,
                         sessions = sessionsOfJob,
                         payments = paymentsOfJob,
+                        workplace = selectedWorkplace,
                         isBusy = state.isBusy,
                         onPayment = { day, amount, kind ->
                             launchOperation { onPayment(day, amount, kind, selectedId) }
