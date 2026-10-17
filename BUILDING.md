@@ -1,21 +1,32 @@
-# Сборка Сменник 0.1.2
+# Сборка Сменник 0.1.4
 
 ## Требования
-- Android Studio с Android SDK 36 и Build Tools 35.0.0.
-- JDK 17+ и Gradle 8.13 (Gradle можно установить через Android Studio или `gradle` CLI).
 
-## Команды
+- Android SDK 36 с Build Tools 35.0.0
+- Java 17
+- Gradle 8.13
+
+## Проверка
 
 ```bash
-gradle :app:testDebugUnitTest :app:assembleDebug
+gradle :app:testDebugUnitTest
 ```
 
-Результат: `app/build/outputs/apk/debug/app-debug.apk`. Либо откройте проект в Android Studio и выполните **Build → Build APK(s)**.
+Обычная debug-сборка по-прежнему доступна разработчикам локально:
+`gradle :app:assembleDebug`. Она **не предназначена для обновления
+пользовательской установки** и не публикуется как релизный APK.
 
-В GitHub Actions файл `.github/workflows/android.yml` запускает те же тесты и собирает APK; успешный APK находится в **Actions → Android Alpha CI → Artifacts**.
+## Постоянно подписанный APK
 
-## Важные замечания
+См. [docs/SIGNING.md](docs/SIGNING.md): настройте два GitHub Actions secrets
+один раз, затем запустите workflow **Android Stable APK**.
 
-- Gradle wrapper properties включены, но JAR wrapper не включён: CLI-команда здесь использует установленный Gradle, а не `./gradlew`.
-- Не считайте исходники готовым APK: сборку необходимо выполнить на машине с Android SDK или дождаться успешного CI.
-- Приложение работает без аккаунта и интернет-разрешения; данные сохраняются локально.
+В GitHub Actions релиз собирается через `gradle :app:assembleRelease`,
+проверяется `apksigner verify` и публикуется как
+`Smennik-0.1.4-signed`. Без секретов выпуск намеренно блокируется.
+
+При локальной сборке задайте `SMENNIK_SIGNING_FILE` (путь к приватному
+`.jks`) и `SMENNIK_SIGNING_PASSWORD`; после этого запускайте
+`gradle :app:assembleRelease`.
+
+Не добавляйте приватный ключ, пароль или секреты в репозиторий.

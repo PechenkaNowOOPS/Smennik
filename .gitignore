@@ -31,3 +31,11 @@ Thumbs.db
 # Misc
 *.log
 *.tmp
+
+# Stable Android signing — NEVER commit
+signing/
+.signing/
+smennik-stable.jks
+signing-password.txt
+signing-keystore-base64.txt
+Smennik-Private-Signing-Kit.zip

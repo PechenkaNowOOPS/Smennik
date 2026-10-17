@@ -4,18 +4,39 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// The signing key is deliberately not stored in this public repository.
+val stableKeyPath = System.getenv("SMENNIK_SIGNING_FILE")
+val stableKeyPassword = System.getenv("SMENNIK_SIGNING_PASSWORD")
+
 android {
+    val stableReleaseSigning =
+        if (!stableKeyPath.isNullOrBlank() && !stableKeyPassword.isNullOrBlank()) {
+            signingConfigs.create("stableRelease") {
+                storeFile = file(stableKeyPath)
+                storePassword = stableKeyPassword
+                keyAlias = "smennik"
+                keyPassword = stableKeyPassword
+            }
+        } else null
+
     namespace = "ru.smennik.app"
     compileSdk = 36
     defaultConfig {
         applicationId = "ru.smennik.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.1.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    buildTypes { release { isMinifyEnabled = false } }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            if (stableReleaseSigning != null) {
+                signingConfig = stableReleaseSigning
+            }
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

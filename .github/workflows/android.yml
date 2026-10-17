@@ -1,11 +1,13 @@
-name: Android Alpha CI
+name: Android Stable APK
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,11 +25,47 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Test and assemble
-        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
-      - name: Publish debug APK artifact
+      - name: Unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+      - name: Load persistent signing key
+        if: github.event_name != 'pull_request'
+        env:
+          SMENNIK_KEYSTORE_BASE64: ${{ secrets.SMENNIK_KEYSTORE_BASE64 }}
+          SMENNIK_KEYSTORE_PASSWORD: ${{ secrets.SMENNIK_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$SMENNIK_KEYSTORE_BASE64" || -z "$SMENNIK_KEYSTORE_PASSWORD" ]]; then
+            echo "::error::Missing stable signing secrets; follow docs/SIGNING.md. No unsigned or ephemeral-debug APK will be published."
+            exit 1
+          fi
+          printf '%s' "$SMENNIK_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/smennik-stable.jks"
+          chmod 600 "$RUNNER_TEMP/smennik-stable.jks"
+          keytool -list -keystore "$RUNNER_TEMP/smennik-stable.jks" -storepass "$SMENNIK_KEYSTORE_PASSWORD" -alias smennik > /dev/null
+          echo "SMENNIK_SIGNING_FILE=$RUNNER_TEMP/smennik-stable.jks" >> "$GITHUB_ENV"
+      - name: Assemble stable-signed APK
+        if: github.event_name != 'pull_request'
+        env:
+          SMENNIK_SIGNING_PASSWORD: ${{ secrets.SMENNIK_KEYSTORE_PASSWORD }}
+        run: gradle :app:assembleRelease --stacktrace
+      - name: Verify signature and pinned certificate
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          actual="$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          expected="3396473c1ccd3a0c6ee483e098d1546bc759a2e92d01519f46930eedb4614b6f"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Wrong signing certificate; release aborted."
+            exit 1
+          fi
+      - name: Publish signed release APK
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: Smennik-0.1.3-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Smennik-0.1.4-signed
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
