@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,14 +54,16 @@ fun SmennikApp(
     state: ShiftUiState,
     onRetryLoad: () -> Unit,
     onSave: suspend (WorkShift) -> Result<Unit>,
-    onRemove: suspend (LocalDate) -> Result<Unit>,
-    onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean) -> Result<Unit>,
+    onRemove: suspend (LocalDate, Long) -> Result<Unit>,
+    onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean, Long) -> Result<Unit>,
+    onCustomPattern: suspend (LocalDate, String, Int, Int, Long, Boolean, Long) -> Result<Unit>,
+    onAddWorkplace: suspend (String, Long) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
     onImportBackup: suspend (Uri) -> Result<Int>,
-    onStartWork: suspend (LocalDate, Long) -> Result<Unit>,
+    onStartWork: suspend (LocalDate, Long, Long) -> Result<Unit>,
     onTogglePause: suspend (Long) -> Result<Unit>,
     onFinishWork: suspend (Long) -> Result<Unit>,
-    onPayment: suspend (LocalDate, Long, PaymentType) -> Result<Unit>,
+    onPayment: suspend (LocalDate, Long, PaymentType, Long) -> Result<Unit>,
     onRemovePayment: suspend (Long) -> Result<Unit>
 ) {
     var tab by remember { mutableIntStateOf(0) }
@@ -70,6 +73,15 @@ fun SmennikApp(
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
     var restoreError by remember { mutableStateOf<String?>(null) }
     var showAbout by remember { mutableStateOf(false) }
+    var showAddWorkplace by remember { mutableStateOf(false) }
+    var selectedWorkplaceId by remember { mutableLongStateOf(1L) }
+    val selectedWorkplace = state.workplaces.firstOrNull { it.id == selectedWorkplaceId }
+        ?: state.workplaces.firstOrNull()
+        ?: Workplace(1L, "Основная работа")
+    val selectedId = selectedWorkplace.id
+    val shiftsOfJob = state.shifts.filter { it.workplaceId == selectedId }
+    val sessionsOfJob = state.sessions.filter { it.workplaceId == selectedId }
+    val paymentsOfJob = state.payments.filter { it.workplaceId == selectedId }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     fun launchOperation(action: suspend () -> Result<Unit>) {
@@ -127,15 +139,40 @@ fun SmennikApp(
             }
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
+                if (!state.isLoading && state.loadingError == null) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 14.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        state.workplaces.forEach { job ->
+                            FilterChip(
+                                selected = selectedId == job.id,
+                                onClick = { selectedWorkplaceId = job.id },
+                                label = { Text(job.name) },
+                                enabled = !state.isBusy
+                            )
+                        }
+                        TextButton(
+                            onClick = { showAddWorkplace = true },
+                            enabled = !state.isBusy
+                        ) { Text("+ Работа", color = lime) }
+                    }
+                }
                 when {
                     state.isLoading -> LoadingScreen()
                     state.loadingError != null -> LoadErrorScreen(state.loadingError, onRetryLoad)
                     tab == 0 -> HomeScreen(
-                        shifts = state.shifts,
-                        sessions = state.sessions,
-                        payments = state.payments,
+                        shifts = shiftsOfJob,
+                        sessions = sessionsOfJob,
+                        payments = paymentsOfJob,
                         isBusy = state.isBusy,
-                        onStartWork = { date, rate -> launchOperation { onStartWork(date, rate) } },
+                        defaultRate = selectedWorkplace.hourlyKopecks,
+                        activeElsewhere = state.sessions.any { it.isRunning && it.workplaceId != selectedId },
+                        onStartWork = { date, rate ->
+                            launchOperation { onStartWork(date, rate, selectedId) }
+                        },
                         onTogglePause = { id -> launchOperation { onTogglePause(id) } },
                         onFinishWork = { id -> launchOperation { onFinishWork(id) } },
                         onEdit = { editing = it },
@@ -148,43 +185,63 @@ fun SmennikApp(
                         onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) }
                     )
                     tab == 1 -> CalendarScreen(
-                        shifts = state.shifts,
-                        sessions = state.sessions,
+                        shifts = shiftsOfJob,
+                        sessions = sessionsOfJob,
                         onEdit = { editing = it },
                         onPattern = { day -> patternAnchor = day; showPatterns = true }
                     )
                     tab == 2 -> FinanceScreen(
-                        shifts = state.shifts,
-                        sessions = state.sessions,
-                        payments = state.payments,
+                        shifts = shiftsOfJob,
+                        sessions = sessionsOfJob,
+                        payments = paymentsOfJob,
                         isBusy = state.isBusy,
                         onPayment = { day, amount, kind ->
-                            launchOperation { onPayment(day, amount, kind) }
+                            launchOperation { onPayment(day, amount, kind, selectedId) }
                         },
                         onRemovePayment = { id -> launchOperation { onRemovePayment(id) } }
                     )
                     else -> StatisticsScreen(
-                        shifts = state.shifts,
-                        sessions = state.sessions,
-                        payments = state.payments
+                        shifts = shiftsOfJob,
+                        sessions = sessionsOfJob,
+                        payments = paymentsOfJob
                     )
                 }
             }
         }
         editing?.let { date ->
             EditShiftDialog(
-                date, state.shifts.firstOrNull { it.date == date }, state.isBusy,
+                date, state.shifts.firstOrNull { it.date == date && it.workplaceId == selectedId }, state.isBusy,
                 onDismiss = { editing = null },
-                onSave = onSave,
-                onRemove = { onRemove(date) }
+                onSave = { entry -> onSave(entry.copy(workplaceId = selectedId)) },
+                onRemove = { onRemove(date, selectedId) }
             )
         }
         if (showPatterns) PatternDialog(
             anchor = patternAnchor,
             isBusy = state.isBusy,
             onDismiss = { showPatterns = false },
-            onSelect = { pattern, start, end, rate, replace -> onPattern(patternAnchor, pattern, start, end, rate, replace) }
+            defaultRate = selectedWorkplace.hourlyKopecks,
+            onSelect = { pattern, start, end, rate, replace ->
+                onPattern(patternAnchor, pattern, start, end, rate, replace, selectedId)
+            },
+            onCustomSelect = { mask, start, end, rate, replace ->
+                onCustomPattern(patternAnchor, mask, start, end, rate, replace, selectedId)
+            }
         )
+        if (showAddWorkplace) {
+            AddWorkplaceDialog(
+                busy = state.isBusy,
+                onDismiss = { showAddWorkplace = false },
+                onAdd = { name, rate ->
+                    val result = onAddWorkplace(name, rate)
+                    if (result.isSuccess) {
+                        showAddWorkplace = false
+                        snackbarHostState.showSnackbar("Место работы добавлено.")
+                    }
+                    result
+                }
+            )
+        }
         if (showAbout) {
             AboutDialog(onDismiss = { showAbout = false })
         }
@@ -221,9 +278,62 @@ fun SmennikApp(
 }
 
 
+
+@Composable
+private fun AddWorkplaceDialog(
+    busy: Boolean, onDismiss: () -> Unit,
+    onAdd: suspend (String, Long) -> Result<Unit>
+) {
+    var name by remember { mutableStateOf("") }
+    var rate by remember { mutableStateOf("350") }
+    var error by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = { if (!busy && !saving) onDismiss() },
+        title = { Text("Новое место работы") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name, onValueChange = { if (it.length <= 60) name = it },
+                    label = { Text("Название (например, Магазин)") }, singleLine = true
+                )
+                OutlinedTextField(
+                    value = rate, onValueChange = { if (it.all(Char::isDigit)) rate = it },
+                    label = { Text("Ставка, ₽/час") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                Text("У нового места работы собственный календарь, учёт времени и выплаты.",
+                    color = textMuted, fontSize = 12.sp)
+                if (error.isNotBlank()) Text(error, color = Color(0xFFFF8585))
+            }
+        },
+        confirmButton = {
+            Button(enabled = !busy && !saving, onClick = {
+                val amount = rate.toLongOrNull()
+                if (name.isBlank() || amount == null || amount !in 0..100_000) {
+                    error = "Введите название и корректную ставку."
+                } else {
+                    saving = true
+                    scope.launch {
+                        onAdd(name.trim(), amount * 100).fold(
+                            onSuccess = { onDismiss() },
+                            onFailure = { error = it.message ?: "Ошибка сохранения"; saving = false }
+                        )
+                    }
+                }
+            }) { Text(if (saving) "Добавление…" else "Добавить") }
+        },
+        dismissButton = {
+            TextButton(enabled = !saving && !busy, onClick = onDismiss) { Text("Отмена") }
+        }
+    )
+}
+
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.3.0", "Несколько мест работы, индивидуальные графики и свои повторяющиеся циклы."),
     VersionNote("0.2.0", "Фактическое время смен, паузы, финансы, выплаты, статистика и резервное копирование v3."),
     VersionNote("0.1.6", "Экран «О приложении», история обновлений и проверка совместимости подписанных APK."),
     VersionNote("0.1.5", "Единая нумерация версий и отображение номера сборки."),
@@ -310,6 +420,8 @@ private fun HomeScreen(
     sessions: List<WorkSession>,
     payments: List<WagePayment>,
     isBusy: Boolean,
+    defaultRate: Long,
+    activeElsewhere: Boolean,
     onStartWork: (LocalDate, Long) -> Unit,
     onTogglePause: (Long) -> Unit,
     onFinishWork: (Long) -> Unit,
@@ -397,14 +509,17 @@ private fun HomeScreen(
                     Text("Время работы и перерывов сохраняется даже после закрытия приложения.",
                         color = textMuted, fontSize = 13.sp)
                     Button(
-                        enabled = !isBusy,
+                        enabled = !isBusy && !activeElsewhere,
                         onClick = { onStartWork(currentShift?.date ?: today,
-                            currentShift?.hourlyKopecks ?: 35_000L) },
+                            currentShift?.hourlyKopecks ?: defaultRate) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
                     ) { Text("▶ Начать рабочую смену") }
+                    if (activeElsewhere) Text(
+                        "Сначала завершите активную смену на другом месте работы.",
+                        color = Color(0xFFFFC47A), fontSize = 12.sp)
                     if (currentShift == null) Text(
-                        "Без графика используется ставка 350 ₽/ч. Её можно изменить в календаре перед началом.",
+                        "Без графика используется ставка выбранного места работы.",
                         color = textMuted, fontSize = 12.sp)
                 } else {
                     Text(if (activeSession.isPaused) "● Перерыв" else "● Идёт смена",
@@ -857,12 +972,16 @@ private fun PatternDialog(
     anchor: LocalDate,
     isBusy: Boolean,
     onDismiss: () -> Unit,
-    onSelect: suspend (WorkPattern, Int, Int, Long, Boolean) -> Result<Unit>
+    defaultRate: Long,
+    onSelect: suspend (WorkPattern, Int, Int, Long, Boolean) -> Result<Unit>,
+    onCustomSelect: suspend (String, Int, Int, Long, Boolean) -> Result<Unit>
 ) {
     val scope = rememberCoroutineScope()
     var start by remember(anchor) { mutableStateOf("08:00") }
     var end by remember(anchor) { mutableStateOf("20:00") }
-    var hourlyRubles by remember(anchor) { mutableStateOf("350") }
+    var hourlyRubles by remember(anchor, defaultRate) { mutableStateOf((defaultRate / 100).toString()) }
+    var customCycle by remember(anchor) { mutableStateOf("РРВВРВ") }
+    var pendingCustom by remember(anchor) { mutableStateOf<Triple<String, Int, Pair<Int, Long>>?>(null) }
     var validation by remember(anchor) { mutableStateOf("") }
     var saving by remember(anchor) { mutableStateOf(false) }
     var replaceExisting by remember(anchor) { mutableStateOf(false) }
@@ -875,6 +994,21 @@ private fun PatternDialog(
         validation = ""
         scope.launch {
             onSelect(pattern, from, to, rate, replace).fold(
+                onSuccess = { onDismiss() },
+                onFailure = {
+                    validation = "Не удалось создать график: ${it.message ?: "ошибка базы данных"}"
+                    saving = false
+                }
+            )
+        }
+    }
+
+    fun selectCustom(mask: String, from: Int, to: Int, rate: Long, replace: Boolean) {
+        if (disabled) return
+        saving = true
+        validation = ""
+        scope.launch {
+            onCustomSelect(mask, from, to, rate, replace).fold(
                 onSuccess = { onDismiss() },
                 onFailure = {
                     validation = "Не удалось создать график: ${it.message ?: "ошибка базы данных"}"
@@ -915,6 +1049,28 @@ private fun PatternDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
                 if (validation.isNotEmpty()) Text(validation, color = Color(0xFFFF8585), fontSize = 13.sp)
+                OutlinedTextField(
+                    value = customCycle,
+                    onValueChange = { customCycle = it.uppercase(russian).take(60) },
+                    label = { Text("Свой цикл: Р — работа, В — выходной") },
+                    supportingText = { Text("Например, РРВВРВ — шесть дней, затем повторение") },
+                    singleLine = true
+                )
+                OutlinedButton(enabled = !disabled, onClick = {
+                    val from = parseTime(start)
+                    val to = parseTime(end)
+                    val rate = hourlyRubles.toLongOrNull()
+                    val valid = runCatching { CustomCycle(customCycle) }.isSuccess
+                    if (!valid || from == null || to == null || rate == null || rate !in 0..100_000) {
+                        validation = "Проверь цикл (Р и В), время и ставку."
+                    } else if (replaceExisting) {
+                        pendingCustom = Triple(customCycle, from, to to (rate * 100))
+                    } else {
+                        selectCustom(customCycle, from, to, rate * 100, false)
+                    }
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Создать свой цикл", color = lime)
+                }
                 listOf(2 to 2, 3 to 3, 5 to 2, 1 to 3, 4 to 2).forEach { (on, off) ->
                     OutlinedButton(enabled = !disabled, onClick = {
                         val from = parseTime(start)
@@ -937,6 +1093,20 @@ private fun PatternDialog(
         },
         confirmButton = { TextButton(enabled = !disabled, onClick = onDismiss) { Text("Закрыть") } }
     )
+    pendingCustom?.let { request ->
+        AlertDialog(
+            onDismissRequest = { if (!disabled) pendingCustom = null },
+            title = { Text("Заменить график на свой цикл?") },
+            text = { Text("Все дни выбранных 90 дней будут перезаписаны только для текущего места работы. Ручные изменения будут потеряны.") },
+            confirmButton = {
+                Button(enabled = !disabled, onClick = {
+                    pendingCustom = null
+                    selectCustom(request.first,request.second,request.third.first,request.third.second,true)
+                }) { Text("Заменить") }
+            },
+            dismissButton = { TextButton(onClick = { pendingCustom = null }) { Text("Отмена") } }
+        )
+    }
     pending?.let { request ->
         AlertDialog(
             onDismissRequest = { if (!disabled) pending = null },

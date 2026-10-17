@@ -21,6 +21,8 @@ class MainActivity : ComponentActivity() {
                 onSave = model::save,
                 onRemove = model::remove,
                 onPattern = model::generate,
+                onCustomPattern = model::generateCustom,
+                onAddWorkplace = model::addWorkplace,
                 onExportBackup = model::exportBackup,
                 onImportBackup = model::importBackup,
                 onStartWork = model::startWork,
