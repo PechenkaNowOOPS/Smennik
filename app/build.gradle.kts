@@ -5,12 +5,16 @@ plugins {
 }
 
 // Version name and monotonically increasing Android versionCode are maintained in one file.
-val appVersion = java.util.Properties().apply {
-    rootProject.file("version.properties").inputStream().use { load(it) }
-}
-val appVersionName = appVersion.getProperty("versionName")
+val appVersionProperties = rootProject.file("version.properties")
+    .readLines()
+    .filter { it.isNotBlank() && !it.trimStart().startsWith("#") }
+    .associate {
+        val (key, value) = it.split("=", limit = 2)
+        key.trim() to value.trim()
+    }
+val appVersionName = appVersionProperties["versionName"]
     ?: error("Missing versionName in version.properties")
-val appVersionCode = appVersion.getProperty("versionCode")?.toIntOrNull()
+val appVersionCode = appVersionProperties["versionCode"]?.toIntOrNull()
     ?: error("Invalid versionCode in version.properties")
 
 // The signing key is deliberately not stored in this public repository.
