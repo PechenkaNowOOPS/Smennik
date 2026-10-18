@@ -6,6 +6,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -304,15 +305,19 @@ private fun TimeWheel(
     modifier: Modifier,
     onSelected: (Int) -> Unit
 ) {
-    val listState=rememberLazyListState(initialFirstVisibleItemIndex=initiallySelected)
+    // Repeat values around the initial selection; this keeps the picked value in
+    // the visual center and allows smooth scrolling in both directions.
+    val listState=rememberLazyListState(
+        initialFirstVisibleItemIndex=count*25+initiallySelected-2
+    )
     val scope=rememberCoroutineScope()
     val centered by remember(listState) {
         derivedStateOf {
             val layout=listState.layoutInfo
-            val center=(layout.viewportStartOffset + layout.viewportEndOffset)/2
+            val center=layout.viewportSize.height/2
             layout.visibleItemsInfo.minByOrNull {
                 abs((it.offset+it.size/2)-center)
-            }?.index?.coerceIn(0,count-1) ?: initiallySelected
+            }?.index?.rem(count) ?: initiallySelected
         }
     }
     LaunchedEffect(listState) {
@@ -330,13 +335,18 @@ private fun TimeWheel(
                 modifier=Modifier.fillMaxWidth().height(210.dp),
                 state=listState,
                 contentPadding=PaddingValues(vertical=84.dp),
-                flingBehavior=rememberSnapFlingBehavior(lazyListState=listState)
+                flingBehavior=rememberSnapFlingBehavior(
+                    lazyListState=listState, snapPosition=SnapPosition.Center
+                )
             ) {
-                items(count) { value ->
+                items(count*51) { index ->
+                    val value=index%count
                     val selected=centered==value
                     Box(Modifier.fillMaxWidth().height(42.dp)
                         .clickable {
-                            scope.launch { listState.animateScrollToItem(value) }
+                            scope.launch {
+                                listState.animateScrollToItem((index-2).coerceAtLeast(0))
+                            }
                         }.background(if(selected)Color(0xFF2B3F28) else Color.Transparent,
                             RoundedCornerShape(11.dp)),
                         contentAlignment=Alignment.Center) {
