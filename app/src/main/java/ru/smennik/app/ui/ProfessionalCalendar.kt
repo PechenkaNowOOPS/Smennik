@@ -275,6 +275,38 @@ fun ProfessionalCalendarScreen(
                         }
                     }
                 }
+                val actualDay = sessions.filter {
+                    it.date == selectedDay &&
+                    (filterWorkplaceId == null || it.workplaceId == filterWorkplaceId)
+                }.sortedBy { it.startedMs }
+                if (actualDay.isNotEmpty()) {
+                    HorizontalDivider(color=Color(0xFF39443F))
+                    Text("ФАКТИЧЕСКИ ОТРАБОТАНО",color=accent,
+                        fontSize=12.sp,fontWeight=FontWeight.Bold)
+                    actualDay.forEach { recorded ->
+                        val job = workplaces.firstOrNull { it.id == recorded.workplaceId }
+                        val nowMs = System.currentTimeMillis()
+                        val breakdown = actualMonthSummary(
+                            listOf(recorded),emptyList(),
+                            YearMonth.from(recorded.date),nowMs,job)
+                        val intervalCount = recorded.breaks.size
+                        val unpaid = recorded.totalPausedMs/60_000
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(job?.name ?: "Работа",fontWeight=FontWeight.SemiBold)
+                            Text(
+                                "${recorded.workedMinutes(nowMs)/60} ч " +
+                                "${recorded.workedMinutes(nowMs)%60} мин · " +
+                                moneyLabel(breakdown.earnedKopecks),
+                                color=accent,fontWeight=FontWeight.SemiBold)
+                            Text("Ночные: ${breakdown.nightMinutes} мин · " +
+                                "Перерывы: ${intervalCount} интервалов, " +
+                                "неоплачиваемые ${unpaid} мин",
+                                color=muted,fontSize=12.sp)
+                            if (recorded.isRunning)
+                                Text("Смена ещё идёт",color=amber,fontSize=12.sp)
+                        }
+                    }
+                }
                 val target = filterWorkplaceId ?: workplaces.firstOrNull()?.id
                 if (target != null) OutlinedButton(
                     onClick = { onEdit(selectedDay, target) },
