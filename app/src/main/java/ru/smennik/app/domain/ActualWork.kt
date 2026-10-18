@@ -8,6 +8,27 @@ import kotlin.math.max
 import java.time.LocalDate
 import java.time.YearMonth
 
+/** Timed break. Paid breaks do not reduce working minutes. */
+data class WorkBreak(val startMs: Long, val endMs: Long, val paid: Boolean = false) {
+    init { require(startMs > 0 && endMs > startMs) }
+    val minutes: Long get() = (endMs-startMs)/60_000L
+}
+
+/** Validates a complete set of timed breaks before persisting a transaction. */
+fun validateBreaks(startMs: Long, endMs: Long, breaks: List<WorkBreak>) {
+    require(breaks.size <= 64) { "Слишком много перерывов (максимум 64)." }
+    var previousEnd = startMs
+    for (item in breaks.sortedBy { it.startMs }) {
+        require(item.startMs >= startMs && item.endMs <= endMs) {
+            "Перерывы должны находиться внутри смены."
+        }
+        require(item.startMs >= previousEnd) { "Перерывы не должны пересекаться." }
+        previousEnd = item.endMs
+    }
+    val unpaid = breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs }
+    require(unpaid < endMs-startMs) { "Неоплачиваемые перерывы не могут занимать всю смену." }
+}
+
 /** Actual work is stored independently from the planned shifts, including across midnight. */
 data class WorkSession(
     val id: Long,
@@ -17,7 +38,8 @@ data class WorkSession(
     val pauseStartedMs: Long? = null,
     val totalPausedMs: Long = 0,
     val hourlyKopecks: Long = 35_000L,
-    val workplaceId: Long = 1
+    val workplaceId: Long = 1,
+    val breaks: List<WorkBreak> = emptyList()
 ) {
     init {
         require(id >= 0 && workplaceId > 0)
@@ -26,6 +48,7 @@ data class WorkSession(
         require(pauseStartedMs == null || (endedMs == null && pauseStartedMs >= startedMs))
         require(totalPausedMs >= 0)
         require(hourlyKopecks in 0..10_000_000L)
+        if (endedMs != null) validateBreaks(startedMs, endedMs, breaks)
     }
 
     val isRunning: Boolean get() = endedMs == null
@@ -57,24 +80,40 @@ data class WagePayment(
  * total without individual timestamps: night minutes are therefore prorated
  * against total worked minutes. Display the bonus as an estimate, not payroll.
  */
+/**
+ * Exact night overlap for intervalized unpaid breaks. Older sessions without
+ * interval details keep their old proportional estimation as a fallback.
+ * Night interval is 22:00–06:00 in the device-local zone.
+ */
 fun estimatedNightMinutes(session: WorkSession, nowMs: Long, zone: ZoneId): Long {
     val end = session.endedMs ?: maxOf(nowMs, session.startedMs)
     if (end <= session.startedMs) return 0L
-    val startDate = Instant.ofEpochMilli(session.startedMs).atZone(zone).toLocalDate().minusDays(1)
-    val endDate = Instant.ofEpochMilli(end).atZone(zone).toLocalDate()
-    var date = startDate
-    var rawNight = 0L
-    while (!date.isAfter(endDate)) {
-        val first = date.atTime(22, 0).atZone(zone).toInstant().toEpochMilli()
-        val last = date.plusDays(1).atTime(6, 0).atZone(zone).toInstant().toEpochMilli()
-        rawNight += (min(end, last) - max(session.startedMs, first)).coerceAtLeast(0)
-        date = date.plusDays(1)
+    fun nightOverlap(startMs: Long, finishMs: Long): Long {
+        if (finishMs <= startMs) return 0L
+        val firstDate = Instant.ofEpochMilli(startMs).atZone(zone).toLocalDate().minusDays(1)
+        val lastDate = Instant.ofEpochMilli(finishMs).atZone(zone).toLocalDate()
+        var day = firstDate
+        var total = 0L
+        while (!day.isAfter(lastDate)) {
+            val nightStart = day.atTime(22, 0).atZone(zone).toInstant().toEpochMilli()
+            val nightEnd = day.plusDays(1).atTime(6, 0).atZone(zone).toInstant().toEpochMilli()
+            total += (min(finishMs, nightEnd)-max(startMs, nightStart)).coerceAtLeast(0)
+            day = day.plusDays(1)
+        }
+        return total
     }
-    val elapsed = (end - session.startedMs).coerceAtLeast(1)
-    val net = session.workedMinutes(nowMs)
-    val elapsedMinutes = elapsed / 60_000
-    if (elapsedMinutes <= 0) return 0L
-    return min(net, (rawNight / 60_000) * net / elapsedMinutes)
+    val elapsed = end-session.startedMs
+    val rawNight = nightOverlap(session.startedMs,end)
+    val knownUnpaid = session.breaks.filterNot { it.paid }
+    val knownUnpaidMs = knownUnpaid.sumOf { it.endMs-it.startMs }
+    val exactNightPause = knownUnpaid.sumOf { nightOverlap(it.startMs,it.endMs) }
+    val unitemizedPause = (session.totalPausedMs-knownUnpaidMs).coerceAtLeast(0) +
+        (session.pauseStartedMs?.let { (end-it).coerceAtLeast(0) } ?: 0L)
+    val freeNight = (rawNight-exactNightPause).coerceAtLeast(0)
+    val freeElapsed = (elapsed-knownUnpaidMs).coerceAtLeast(1)
+    val remainingNight = (freeNight-
+        freeNight*unitemizedPause.coerceAtMost(freeElapsed)/freeElapsed).coerceAtLeast(0)
+    return min(session.workedMinutes(nowMs),remainingNight/60_000L)
 }
 
 data class ActualMonthSummary(
