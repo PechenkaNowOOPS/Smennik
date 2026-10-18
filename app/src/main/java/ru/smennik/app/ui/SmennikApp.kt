@@ -77,6 +77,8 @@ fun SmennikApp(
     onPayment: suspend (LocalDate, Long, PaymentType, Long) -> Result<Unit>,
     onRemovePayment: suspend (Long) -> Result<Unit>,
     onEditFinishedSession: suspend (Long, Long, Long, Int) -> Result<Unit>,
+    onAddHistoricalSession: suspend (Long, Long, Long, Long, List<WorkBreak>, Int) -> Result<Unit>,
+    onEditDetailedSession: suspend (Long, Long, Long, Long, List<WorkBreak>, Int) -> Result<Unit>,
     onDeleteFinishedSession: suspend (Long) -> Result<Unit>,
     onExportCsv: suspend (Uri, Long, YearMonth) -> Result<Unit>
 ) {
@@ -244,6 +246,10 @@ fun SmennikApp(
                         sessions = sessionsOfJob,
                         payments = paymentsOfJob,
                         workplace = selectedWorkplace,
+                        onAddHistorical = { begin,end,rate,breaks,legacy ->
+                            onAddHistoricalSession(selectedId,begin,end,rate,breaks,legacy)
+                        },
+                        onEditDetailed = onEditDetailedSession,
                         onEditCompleted = onEditFinishedSession,
                         onDeleteCompleted = { id -> launchOperation { onDeleteFinishedSession(id) } },
                         onExportCsv = { uri, month -> onExportCsv(uri, selectedId, month) }
@@ -1037,11 +1043,14 @@ private fun StatisticsScreen(
     shifts: List<WorkShift>, sessions: List<WorkSession>,
     payments: List<WagePayment>, workplace: Workplace,
     onEditCompleted: suspend (Long, Long, Long, Int) -> Result<Unit>,
+    onAddHistorical: suspend (Long, Long, Long, List<WorkBreak>, Int) -> Result<Unit>,
+    onEditDetailed: suspend (Long, Long, Long, Long, List<WorkBreak>, Int) -> Result<Unit>,
     onDeleteCompleted: (Long) -> Unit,
     onExportCsv: suspend (Uri, YearMonth) -> Result<Unit>
 ) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     var editingSession by remember { mutableStateOf<WorkSession?>(null) }
+    var showManualEntry by remember { mutableStateOf(false) }
     var deleteCandidate by remember { mutableStateOf<WorkSession?>(null) }
     val context = LocalContext.current
     val exportScope = rememberCoroutineScope()
@@ -1089,6 +1098,11 @@ private fun StatisticsScreen(
             colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
         ) { Text("↓ Экспортировать месяц в CSV") }
         Text("История отработанных смен", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Button(
+            onClick = { showManualEntry = true },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
+        ) { Text("＋ Добавить пропущенную смену") }
         val completed = sessions.filter {
             !it.isRunning && YearMonth.from(it.date) == month
         }.sortedByDescending { it.startedMs }
@@ -1107,6 +1121,12 @@ private fun StatisticsScreen(
                     Text("${shift.workedMinutes(System.currentTimeMillis())} мин · " +
                         rubles(shift.earnedKopecks(System.currentTimeMillis())),
                         color = textMuted, fontSize = 12.sp)
+                    val oldMinutes = (shift.totalPausedMs -
+                        shift.breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs })
+                        .coerceAtLeast(0L) / 60_000L
+                    if(shift.breaks.isNotEmpty() || oldMinutes>0)
+                        Text("Перерывы: ${shift.breaks.size} интервалов · без времени ${oldMinutes} мин",
+                            color=textMuted,fontSize=12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { editingSession = shift }) {
                             Text("Исправить", color = lime)
@@ -1120,11 +1140,23 @@ private fun StatisticsScreen(
         }
         Spacer(Modifier.height(18.dp))
     }
+    val initialDay = if (month == YearMonth.now()) LocalDate.now() else month.atDay(1)
+    if (showManualEntry) {
+        HistoricalWorkDialog(
+            existing = null,workplace = workplace,initialDate=initialDay,
+            onDismiss = { showManualEntry = false },
+            onSave = { _,start,end,rate,breaks,legacy ->
+                onAddHistorical(start,end,rate,breaks,legacy)
+            }
+        )
+    }
     editingSession?.let { item ->
-        CompletedSessionDialog(
-            session = item,
-            onDismiss = { editingSession = null },
-            onSave = onEditCompleted
+        HistoricalWorkDialog(
+            existing=item,workplace=workplace,initialDate=item.date,
+            onDismiss={editingSession=null},
+            onSave={ session,start,end,rate,breaks,legacy ->
+                onEditDetailed(session!!.id,start,end,rate,breaks,legacy)
+            }
         )
     }
     deleteCandidate?.let { item ->

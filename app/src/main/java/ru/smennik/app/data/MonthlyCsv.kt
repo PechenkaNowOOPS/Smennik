@@ -51,6 +51,18 @@ object MonthlyCsv {
                 ))
             }
         result.append(row(""))
+        result.append(row("ИНТЕРВАЛЫ ПЕРЕРЫВОВ"))
+        result.append(row("Дата смены","Начало перерыва","Конец перерыва","Оплачиваемый"))
+        sessions.asSequence().filter { YearMonth.from(it.date) == month }
+            .sortedBy { it.startedMs }.forEach { s ->
+                s.breaks.forEach { pause ->
+                    result.append(row(s.date.toString(),
+                        Instant.ofEpochMilli(pause.startMs).atZone(zone).format(dateTime),
+                        Instant.ofEpochMilli(pause.endMs).atZone(zone).format(dateTime),
+                        if(pause.paid) "Да" else "Нет"))
+                }
+            }
+        result.append(row(""))
         result.append(row("ОПЕРАЦИИ"))
         result.append(row("Дата","Тип","Сумма, ₽"))
         payments.asSequence().filter { YearMonth.from(it.date) == month }

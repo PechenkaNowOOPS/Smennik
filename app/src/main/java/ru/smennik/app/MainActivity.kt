@@ -35,6 +35,8 @@ class MainActivity : ComponentActivity() {
                 onPayment = model::addPayment,
                 onRemovePayment = model::removePayment,
                 onEditFinishedSession = model::editFinishedSession,
+                onAddHistoricalSession = model::addHistoricalSession,
+                onEditDetailedSession = model::editDetailedSession,
                 onDeleteFinishedSession = model::deleteFinishedSession,
                 onExportCsv = model::exportMonthlyCsv
             )
