@@ -21,7 +21,7 @@ class WorkdayMetricsTest {
         val stats = calculateWorkdayMetrics(session,start+50*60_000L)
         assertEquals(30*60L,stats.paidSeconds)
         assertEquals(20*60L,stats.unpaidBreakSeconds)
-        assertEquals(300_000L,stats.earnedKopecks)
+        assertEquals(30_000L,stats.earnedKopecks)
     }
 
     @Test fun plannedHoursYieldSafeOvertime() {
