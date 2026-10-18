@@ -22,6 +22,7 @@ class MainActivity : ComponentActivity() {
                 onRemove = model::remove,
                 onPattern = model::generate,
                 onCustomPattern = model::generateCustom,
+                onBulkPlan = model::applyBulkPlan,
                 onAddWorkplace = model::addWorkplace,
                 onUpdatePayRules = model::updatePayRules,
                 onExportBackup = model::exportBackup,

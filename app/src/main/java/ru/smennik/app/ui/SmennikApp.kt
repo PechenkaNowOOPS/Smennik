@@ -64,6 +64,7 @@ fun SmennikApp(
     onRemove: suspend (LocalDate, Long) -> Result<Unit>,
     onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean, Long) -> Result<Unit>,
     onCustomPattern: suspend (LocalDate, String, Int, Int, Long, Boolean, Long) -> Result<Unit>,
+    onBulkPlan: suspend (BulkPlan) -> Result<Unit>,
     onAddWorkplace: suspend (String, Long) -> Result<Unit>,
     onUpdatePayRules: suspend (Long, Int, Int, Int) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
@@ -87,13 +88,15 @@ fun SmennikApp(
     var showReminders by remember { mutableStateOf(false) }
     var showAddWorkplace by remember { mutableStateOf(false) }
     var selectedWorkplaceId by remember { mutableLongStateOf(1L) }
+    var editingWorkplaceId by remember { mutableLongStateOf(1L) }
     val selectedWorkplace = state.workplaces.firstOrNull { it.id == selectedWorkplaceId }
         ?: state.workplaces.firstOrNull()
         ?: Workplace(1L, "Основная работа")
-    val selectedId = selectedWorkplace.id
-    val shiftsOfJob = state.shifts.filter { it.workplaceId == selectedId }
-    val sessionsOfJob = state.sessions.filter { it.workplaceId == selectedId }
-    val paymentsOfJob = state.payments.filter { it.workplaceId == selectedId }
+    val selectedId = if (selectedWorkplaceId == 0L && (tab == 1 || tab == 3))
+        0L else selectedWorkplace.id
+    val shiftsOfJob = state.shifts.filter { selectedId == 0L || it.workplaceId == selectedId }
+    val sessionsOfJob = state.sessions.filter { selectedId == 0L || it.workplaceId == selectedId }
+    val paymentsOfJob = state.payments.filter { selectedId == 0L || it.workplaceId == selectedId }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     fun launchOperation(action: suspend () -> Result<Unit>) {
@@ -158,6 +161,11 @@ fun SmennikApp(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        if (tab == 1 || tab == 3) {
+                            FilterChip(selected = selectedId == 0L,
+                                onClick = { selectedWorkplaceId = 0L },
+                                label = { Text("Все работы") })
+                        }
                         state.workplaces.forEach { job ->
                             FilterChip(
                                 selected = selectedId == job.id,
@@ -187,7 +195,7 @@ fun SmennikApp(
                         },
                         onTogglePause = { id -> launchOperation { onTogglePause(id) } },
                         onFinishWork = { id -> launchOperation { onFinishWork(id) } },
-                        onEdit = { editing = it },
+                        onEdit = { editingWorkplaceId = selectedId; editing = it },
                         onCalendar = { tab = 1 },
                         onAbout = { showAbout = true },
                         onReminders = { showReminders = true },
@@ -197,11 +205,14 @@ fun SmennikApp(
                         },
                         onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) }
                     )
-                    tab == 1 -> CalendarScreen(
-                        shifts = shiftsOfJob,
-                        sessions = sessionsOfJob,
-                        onEdit = { editing = it },
-                        onPattern = { day -> patternAnchor = day; showPatterns = true }
+                    tab == 1 -> ProfessionalCalendarScreen(
+                        shifts = state.shifts,
+                        workplaces = state.workplaces,
+                        sessions = state.sessions,
+                        filterWorkplaceId = selectedId.takeIf { it != 0L },
+                        onEdit = { day, job -> editingWorkplaceId = job; editing = day },
+                        onPattern = { day -> patternAnchor = day; showPatterns = true },
+                        onBulk = onBulkPlan
                     )
                     tab == 2 -> FinanceScreen(
                         shifts = shiftsOfJob,
@@ -217,7 +228,12 @@ fun SmennikApp(
                             onUpdatePayRules(selectedId, night, extra, limit)
                         }
                     )
-                    else -> StatisticsScreen(
+                    else -> if (selectedId == 0L) AllWorkStatisticsScreen(
+                        shifts = state.shifts,
+                        sessions = state.sessions,
+                        payments = state.payments,
+                        workplaces = state.workplaces
+                    ) else StatisticsScreen(
                         shifts = shiftsOfJob,
                         sessions = sessionsOfJob,
                         payments = paymentsOfJob,
@@ -231,10 +247,11 @@ fun SmennikApp(
         }
         editing?.let { date ->
             EditShiftDialog(
-                date, state.shifts.firstOrNull { it.date == date && it.workplaceId == selectedId }, state.isBusy,
+                date, state.shifts.firstOrNull { it.date == date && it.workplaceId == editingWorkplaceId },
+                state.isBusy,
                 onDismiss = { editing = null },
-                onSave = { entry -> onSave(entry.copy(workplaceId = selectedId)) },
-                onRemove = { onRemove(date, selectedId) }
+                onSave = { entry -> onSave(entry.copy(workplaceId = editingWorkplaceId)) },
+                onRemove = { onRemove(date, editingWorkplaceId) }
             )
         }
         if (showPatterns) PatternDialog(
@@ -357,6 +374,7 @@ private fun AddWorkplaceDialog(
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.6.0", "Общий календарь, недельный и дневной режимы, конфликты, массовое планирование и аналитика."),
     VersionNote("0.5.0", "Уведомления о сменах, история и исправление фактического времени, CSV-отчёты, обзор недели."),
     VersionNote("0.4.0", "Настройка ночных доплат и переработок, премии, удержания, подробный расчёт зарплаты."),
     VersionNote("0.3.0", "Несколько мест работы, индивидуальные графики и свои повторяющиеся циклы."),
@@ -1336,8 +1354,17 @@ private fun EditShiftDialog(
                 Text("Равное время начала и конца — смена 24 часа. Более раннее окончание — следующий день.", fontSize = 12.sp, color = textMuted)
                 if (validation.isNotEmpty()) Text(validation, color = Color(0xFFFF8585), fontSize = 13.sp)
                 if (operationError.isNotEmpty()) Text(operationError, color = Color(0xFFFF8585), fontSize = 13.sp)
-                OutlinedButton(enabled = !disabled, onClick = { submit(WorkShift(date, DayType.OFF)) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Отметить выходной")
+                listOf(
+                    DayType.OFF to "Выходной",
+                    DayType.VACATION to "Отпуск",
+                    DayType.SICK to "Больничный",
+                    DayType.HOLIDAY to "Праздник"
+                ).forEach { (kind, title) ->
+                    OutlinedButton(enabled = !disabled,
+                        onClick = { submit(WorkShift(date, kind)) },
+                        modifier = Modifier.fillMaxWidth()) {
+                        Text(title)
+                    }
                 }
                 if (old != null) TextButton(enabled = !disabled, onClick = ::clearDay) {
                     Text("Очистить день", color = Color(0xFFFF8585))
