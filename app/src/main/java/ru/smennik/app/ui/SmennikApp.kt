@@ -1236,10 +1236,8 @@ private fun CompletedSessionDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = start, onValueChange = { start = it },
-                    label = { Text("Начало: ГГГГ-ММ-ДД ЧЧ:ММ") }, singleLine = true)
-                OutlinedTextField(value = end, onValueChange = { end = it },
-                    label = { Text("Конец: ГГГГ-ММ-ДД ЧЧ:ММ") }, singleLine = true)
+                ShiftDateTimePickerField("Начало смены", start, !saving) { start = it }
+                ShiftDateTimePickerField("Завершение смены", end, !saving) { end = it }
                 OutlinedTextField(value = pause,
                     onValueChange = { if (it.all(Char::isDigit)) pause = it.take(4) },
                     label = { Text("Неоплачиваемые перерывы, мин") }, singleLine = true,
@@ -1493,8 +1491,14 @@ private fun EditShiftDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Время работы и почасовая ставка", color = textMuted)
-                OutlinedTextField(value = start, onValueChange = { start = it }, label = { Text("Начало, ЧЧ:ММ") }, singleLine = true)
-                OutlinedTextField(value = end, onValueChange = { end = it }, label = { Text("Окончание, ЧЧ:ММ") }, singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ShiftTimePickerField("Начало", start, !disabled, Modifier.weight(1f)) {
+                        start = it
+                    }
+                    ShiftTimePickerField("Окончание", end, !disabled, Modifier.weight(1f)) {
+                        end = it
+                    }
+                }
                 OutlinedTextField(value = hourlyRubles, onValueChange = { hourlyRubles = it }, label = { Text("Ставка, ₽/час") }, singleLine = true)
                 Text("Равное время начала и конца — смена 24 часа. Более раннее окончание — следующий день.", fontSize = 12.sp, color = textMuted)
                 if (validation.isNotEmpty()) Text(validation, color = Color(0xFFFF8585), fontSize = 13.sp)
@@ -1599,14 +1603,14 @@ private fun PatternDialog(
                 }
                 if (replaceExisting) Text("Внимание: все записи за эти 90 дней будут заменены. Сначала экспортируйте резервную копию.", color = Color(0xFFFF8585), fontSize = 12.sp)
                 Text("Для 5/2 рабочие дни — понедельник–пятница. Совпадающее начало и окончание = 24 ч.", color = textMuted, fontSize = 12.sp)
-                OutlinedTextField(
-                    value = start, onValueChange = { start = it },
-                    label = { Text("Начало смены, ЧЧ:ММ") }, singleLine = true
-                )
-                OutlinedTextField(
-                    value = end, onValueChange = { end = it },
-                    label = { Text("Окончание смены, ЧЧ:ММ") }, singleLine = true
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ShiftTimePickerField("Начало смены", start, !disabled, Modifier.weight(1f)) {
+                        start = it
+                    }
+                    ShiftTimePickerField("Окончание", end, !disabled, Modifier.weight(1f)) {
+                        end = it
+                    }
+                }
                 OutlinedTextField(
                     value = hourlyRubles,
                     onValueChange = { value -> if (value.all { it.isDigit() }) hourlyRubles = value },

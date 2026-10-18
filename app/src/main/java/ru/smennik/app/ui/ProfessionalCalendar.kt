@@ -393,10 +393,14 @@ private fun BulkEditDialog(
                         label = { Text(title) })
                 }
                 if (!moveMode && kind == DayType.WORK) {
-                    OutlinedTextField(value = start, onValueChange = { start = it },
-                        label = { Text("Начало ЧЧ:ММ") }, singleLine = true)
-                    OutlinedTextField(value = finish, onValueChange = { finish = it },
-                        label = { Text("Конец ЧЧ:ММ") }, singleLine = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ShiftTimePickerField("Начало", start, !saving, Modifier.weight(1f)) {
+                            start = it
+                        }
+                        ShiftTimePickerField("Окончание", finish, !saving, Modifier.weight(1f)) {
+                            finish = it
+                        }
+                    }
                     OutlinedTextField(value = pay,
                         onValueChange = { if (it.all(Char::isDigit)) pay = it.take(6) },
                         label = { Text("Ставка, ₽/ч") }, singleLine = true)
