@@ -11,13 +11,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import ru.smennik.app.MainActivity
 import ru.smennik.app.data.ShiftStore
 import ru.smennik.app.domain.DayType
 import ru.smennik.app.domain.WorkShift
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -71,7 +68,7 @@ object ShiftReminders {
         val manager = app.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         prefs.getStringSet(SCHEDULED, emptySet()).orEmpty().forEach { id ->
             id.toIntOrNull()?.let { token ->
-                manager.cancel(pending(app, token, null, PendingIntent.FLAG_NO_CREATE))
+                pending(app, token, null, PendingIntent.FLAG_NO_CREATE)?.let(manager::cancel)
             }
         }
         val ids = linkedSetOf<String>()
