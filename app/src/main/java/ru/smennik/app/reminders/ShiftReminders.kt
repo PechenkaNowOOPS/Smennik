@@ -29,6 +29,7 @@ object ShiftReminders {
     private const val LEAD = "lead_minutes"
     private const val SCHEDULED = "scheduled_alarm_ids"
     private const val ACTION_FIRE = "ru.smennik.app.REMINDER_FIRE"
+    private const val ACTION_REFRESH = "ru.smennik.app.REMINDER_REFRESH"
     private const val CHANNEL = "smennik_upcoming_shifts"
     val availableLeadMinutes = listOf(15, 30, 60, 120)
 
@@ -72,7 +73,16 @@ object ShiftReminders {
             }
         }
         val ids = linkedSetOf<String>()
+        val refreshIntent = Intent(app, ReminderReceiver::class.java).setAction(ACTION_REFRESH)
+        val refreshPi = PendingIntent.getBroadcast(app, Int.MIN_VALUE, refreshIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        manager.cancel(refreshPi)
         if (enabled(app) && notificationsAllowed(app)) {
+            // Daily inexact refresh ensures shifts farther than 60 days become scheduled
+            // even if the user never opens the application again.
+            manager.setInexactRepeating(AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + AlarmManager.INTERVAL_DAY,
+                AlarmManager.INTERVAL_DAY, refreshPi)
             val now = System.currentTimeMillis()
             val end = now + 60L * 24 * 60 * 60 * 1000
             val minutes = leadMinutes(app)
@@ -159,6 +169,7 @@ class ReminderReceiver : BroadcastReceiver() {
                         intent.getLongExtra("expected_start_ms", 0L)
                     )
                 } else if (intent.action in listOf(
+                        "ru.smennik.app.REMINDER_REFRESH",
                         Intent.ACTION_BOOT_COMPLETED,
                         Intent.ACTION_TIME_CHANGED,
                         Intent.ACTION_TIMEZONE_CHANGED,
