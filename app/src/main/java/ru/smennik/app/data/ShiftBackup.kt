@@ -16,7 +16,7 @@ import java.time.LocalDate
 object ShiftBackup {
     const val MAX_BYTES = 5 * 1024 * 1024
     private const val FORMAT = "ru.smennik.backup"
-    private const val VERSION = 6
+    private const val VERSION = 7
     private const val MAX_SHIFTS = 100_000
 
     data class Snapshot(
@@ -82,7 +82,8 @@ object ShiftBackup {
                 .put("id",w.id).put("name",w.name).put("hourlyKopecks",w.hourlyKopecks)
                 .put("nightBonusPercent",w.nightBonusPercent)
                 .put("overtimeBonusPercent",w.overtimeBonusPercent)
-                .put("overtimeAfterMinutes",w.overtimeAfterMinutes))
+                .put("overtimeAfterMinutes",w.overtimeAfterMinutes)
+                .put("monthlyGoalKopecks",w.monthlyGoalKopecks))
         }
         val payload = JSONObject()
             .put("version", VERSION)
@@ -127,7 +128,8 @@ object ShiftBackup {
                 Workplace(w.getLong("id"), w.getString("name"), w.getLong("hourlyKopecks"),
                     nightBonusPercent = if (fileVersion >= 5) w.getInt("nightBonusPercent") else 0,
                     overtimeBonusPercent = if (fileVersion >= 5) w.getInt("overtimeBonusPercent") else 0,
-                    overtimeAfterMinutes = if (fileVersion >= 5) w.getInt("overtimeAfterMinutes") else 480)
+                    overtimeAfterMinutes = if (fileVersion >= 5) w.getInt("overtimeAfterMinutes") else 480,
+                    monthlyGoalKopecks = if (fileVersion >= 7) w.getLong("monthlyGoalKopecks") else 0L)
             }
             require(result.any { it.id == 1L } && result.map { it.id }.toSet().size == result.size)
             result

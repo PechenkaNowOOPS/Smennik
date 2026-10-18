@@ -23,6 +23,7 @@ import ru.smennik.app.domain.PaymentType
 import ru.smennik.app.domain.WorkPattern
 import ru.smennik.app.domain.WorkShift
 import ru.smennik.app.reminders.ShiftReminders
+import ru.smennik.app.widgets.ShiftWidgetUpdater
 import java.time.YearMonth
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -74,6 +75,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.IO) {
                     runCatching {
                         ShiftReminders.sync(getApplication<Application>().applicationContext, snapshot.shifts)
+                        ShiftWidgetUpdater.updateAll(getApplication<Application>().applicationContext)
                     }
                 }
             } catch (error: Exception) {
@@ -100,6 +102,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.IO) {
                 runCatching {
                     ShiftReminders.sync(getApplication<Application>().applicationContext, shifts.shifts)
+                    ShiftWidgetUpdater.updateAll(getApplication<Application>().applicationContext)
                 }
             }
             Result.success(Unit)
@@ -140,6 +143,9 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun updatePayRules(id: Long, nightPercent: Int, overtimePercent: Int,
                                overtimeAfterMinutes: Int): Result<Unit> =
         mutate { store.updatePayRules(id, nightPercent, overtimePercent, overtimeAfterMinutes) }
+
+    suspend fun updateMonthlyGoal(id: Long, goalKopecks: Long): Result<Unit> =
+        mutate { store.updateMonthlyGoal(id, goalKopecks) }
 
     suspend fun applyBulkPlan(plan: BulkPlan): Result<Unit> =
         mutate { store.applyBulkPlan(plan) }
@@ -253,6 +259,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.IO) {
                 runCatching {
                     ShiftReminders.sync(getApplication<Application>().applicationContext, updated.shifts)
+                    ShiftWidgetUpdater.updateAll(getApplication<Application>().applicationContext)
                 }
             }
             Result.success(restored.shifts.size + restored.sessions.size + restored.payments.size)

@@ -10,7 +10,8 @@ data class Workplace(
     val hourlyKopecks: Long = 35_000L,
     val nightBonusPercent: Int = 0,
     val overtimeBonusPercent: Int = 0,
-    val overtimeAfterMinutes: Int = 480
+    val overtimeAfterMinutes: Int = 480,
+    val monthlyGoalKopecks: Long = 0L
 ) {
     init {
         require(id > 0)
@@ -18,6 +19,7 @@ data class Workplace(
         require(hourlyKopecks in 0..10_000_000L)
         require(nightBonusPercent in 0..200 && overtimeBonusPercent in 0..200)
         require(overtimeAfterMinutes in 60..1440)
+        require(monthlyGoalKopecks in 0..100_000_000_00L)
     }
 }
 

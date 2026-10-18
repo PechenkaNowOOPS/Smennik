@@ -20,7 +20,7 @@ import java.time.Instant
 import java.time.ZoneId
 
 /** Additive migrations: existing shifts and manual overrides are never erased. */
-class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", null, 5) {
+class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", null, 6) {
     private fun createWorkplaces(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE IF NOT EXISTS workplaces (
             id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -28,7 +28,8 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
             hourly_kopecks INTEGER NOT NULL,
             night_bonus_percent INTEGER NOT NULL DEFAULT 0,
             overtime_bonus_percent INTEGER NOT NULL DEFAULT 0,
-            overtime_after_minutes INTEGER NOT NULL DEFAULT 480
+            overtime_after_minutes INTEGER NOT NULL DEFAULT 480,
+            monthly_goal_kopecks INTEGER NOT NULL DEFAULT 0
         )""")
         db.execSQL("INSERT OR IGNORE INTO workplaces(id,name,hourly_kopecks) VALUES (1,'Основная работа',35000)")
         // New jobs are stored separately: avoids rebuilding the legacy 'shifts' table.
@@ -79,7 +80,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        require(oldVersion in 1..4 && newVersion == 5) {
+        require(oldVersion in 1..5 && newVersion == 6) {
             "Нет безопасной миграции SQLite с $oldVersion на $newVersion"
         }
         if (oldVersion < 2) {
@@ -90,21 +91,25 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
             createWorkplaces(db)
             db.execSQL("ALTER TABLE work_sessions ADD COLUMN workplace_id INTEGER NOT NULL DEFAULT 1")
             db.execSQL("ALTER TABLE wage_payments ADD COLUMN workplace_id INTEGER NOT NULL DEFAULT 1")
-        } else {
+        } else if (oldVersion < 5) {
             db.execSQL("ALTER TABLE workplaces ADD COLUMN night_bonus_percent INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE workplaces ADD COLUMN overtime_bonus_percent INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE workplaces ADD COLUMN overtime_after_minutes INTEGER NOT NULL DEFAULT 480")
+        }
+        if (oldVersion >= 4) {
+            db.execSQL("ALTER TABLE workplaces ADD COLUMN monthly_goal_kopecks INTEGER NOT NULL DEFAULT 0")
         }
     }
 
     fun workplaces(): List<Workplace> {
         val result = mutableListOf<Workplace>()
         readableDatabase.query("workplaces", arrayOf("id", "name", "hourly_kopecks",
-            "night_bonus_percent", "overtime_bonus_percent", "overtime_after_minutes"),
+            "night_bonus_percent", "overtime_bonus_percent", "overtime_after_minutes",
+            "monthly_goal_kopecks"),
             null,null,null,null,"id ASC").use { c ->
             while (c.moveToNext()) result += Workplace(
                 c.getLong(0), c.getString(1), c.getLong(2),
-                c.getInt(3), c.getInt(4), c.getInt(5)
+                c.getInt(3), c.getInt(4), c.getInt(5), c.getLong(6)
             )
         }
         return result
@@ -131,6 +136,14 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         check(writableDatabase.update("workplaces", values, "id=?", arrayOf(id.toString())) == 1) {
             "Место работы не найдено."
         }
+    }
+
+    /** The monthly target is per workplace; zero means no target configured. */
+    fun updateMonthlyGoal(workplaceId: Long, goalKopecks: Long) {
+        require(goalKopecks in 0..100_000_000_00L) { "Цель должна быть от 0 до 100 млн ₽." }
+        val values = ContentValues().apply { put("monthly_goal_kopecks", goalKopecks) }
+        check(writableDatabase.update("workplaces",values,"id=?",
+            arrayOf(workplaceId.toString())) == 1) { "Место работы не найдено." }
     }
 
     private fun ensureWorkplace(db: SQLiteDatabase, workplaceId: Long) {
@@ -295,6 +308,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                     put("night_bonus_percent",job.nightBonusPercent)
                     put("overtime_bonus_percent",job.overtimeBonusPercent)
                     put("overtime_after_minutes",job.overtimeAfterMinutes)
+                    put("monthly_goal_kopecks",job.monthlyGoalKopecks)
                 })
             }
             snapshot.shifts.forEach {
