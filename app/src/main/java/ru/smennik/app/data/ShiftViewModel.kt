@@ -18,6 +18,7 @@ import ru.smennik.app.domain.BulkPlan
 import ru.smennik.app.domain.CustomCycle
 import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.WorkSession
+import ru.smennik.app.domain.WorkBreak
 import ru.smennik.app.domain.WagePayment
 import ru.smennik.app.domain.PaymentType
 import ru.smennik.app.domain.WorkPattern
@@ -132,6 +133,20 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         id: Long, startMs: Long, endMs: Long, breakMinutes: Int
     ): Result<Unit> = mutate {
         store.editFinishedSession(id, startMs, endMs, breakMinutes)
+    }
+
+    suspend fun addHistoricalSession(
+        workplaceId: Long, startedMs: Long, endedMs: Long,
+        hourlyKopecks: Long, breaks: List<WorkBreak>, legacyMinutes: Int
+    ): Result<Unit> = mutate {
+        store.addManualSession(workplaceId,startedMs,endedMs,hourlyKopecks,breaks,legacyMinutes)
+    }
+
+    suspend fun editDetailedSession(
+        id: Long, startedMs: Long, endedMs: Long, hourlyKopecks: Long,
+        breaks: List<WorkBreak>, legacyMinutes: Int
+    ): Result<Unit> = mutate {
+        store.editFinishedSessionDetailed(id,startedMs,endedMs,hourlyKopecks,breaks,legacyMinutes)
     }
 
     suspend fun deleteFinishedSession(id: Long): Result<Unit> =
