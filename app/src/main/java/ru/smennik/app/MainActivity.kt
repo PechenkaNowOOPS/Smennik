@@ -30,7 +30,10 @@ class MainActivity : ComponentActivity() {
                 onTogglePause = model::togglePause,
                 onFinishWork = model::finishWork,
                 onPayment = model::addPayment,
-                onRemovePayment = model::removePayment
+                onRemovePayment = model::removePayment,
+                onEditFinishedSession = model::editFinishedSession,
+                onDeleteFinishedSession = model::deleteFinishedSession,
+                onExportCsv = model::exportMonthlyCsv
             )
         }
     }

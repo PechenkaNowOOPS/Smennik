@@ -14,6 +14,8 @@ import ru.smennik.app.domain.ShiftOrigin
 import ru.smennik.app.domain.WorkPattern
 import ru.smennik.app.domain.WorkShift
 import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
 
 /** Additive migrations: existing shifts and manual overrides are never erased. */
 class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", null, 5) {
@@ -132,6 +134,34 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
     private fun ensureWorkplace(db: SQLiteDatabase, workplaceId: Long) {
         db.rawQuery("SELECT id FROM workplaces WHERE id=?",arrayOf(workplaceId.toString())).use {
             require(it.moveToFirst()) { "Выбранное место работы не найдено." }
+        }
+    }
+
+    /** Correct finished sessions only. Their row IDs remain stable for backups and history. */
+    fun editFinishedSession(id: Long, startMs: Long, endMs: Long, breakMinutes: Int) {
+        require(startMs > 0 && endMs > startMs)
+        require(endMs - startMs <= 48L * 60 * 60 * 1000) { "Смена не может длиться более 48 часов." }
+        require(breakMinutes in 0..2880 && breakMinutes.toLong() * 60_000 < endMs - startMs) {
+            "Перерывы должны быть короче смены."
+        }
+        val shiftDate = Instant.ofEpochMilli(startMs).atZone(ZoneId.systemDefault()).toLocalDate()
+        val values = ContentValues().apply {
+            put("shift_date", shiftDate.toString())
+            put("started_ms", startMs)
+            put("ended_ms", endMs)
+            putNull("pause_started_ms")
+            put("total_paused_ms", breakMinutes.toLong() * 60_000)
+        }
+        check(writableDatabase.update("work_sessions", values,
+            "id = ? AND ended_ms IS NOT NULL", arrayOf(id.toString())) == 1) {
+            "Завершённая смена не найдена."
+        }
+    }
+
+    fun deleteFinishedSession(id: Long) {
+        check(writableDatabase.delete("work_sessions",
+            "id = ? AND ended_ms IS NOT NULL", arrayOf(id.toString())) == 1) {
+            "Завершённая смена не найдена."
         }
     }
 

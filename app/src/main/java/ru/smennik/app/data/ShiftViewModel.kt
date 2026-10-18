@@ -20,6 +20,8 @@ import ru.smennik.app.domain.WagePayment
 import ru.smennik.app.domain.PaymentType
 import ru.smennik.app.domain.WorkPattern
 import ru.smennik.app.domain.WorkShift
+import ru.smennik.app.reminders.ShiftReminders
+import java.time.YearMonth
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.time.LocalDate
@@ -67,6 +69,11 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
                         payments = snapshot.payments, workplaces = snapshot.workplaces,
                         isLoading = false, loadingError = null)
                 }
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        ShiftReminders.sync(getApplication<Application>().applicationContext, snapshot.shifts)
+                    }
+                }
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, loadingError = "Не удалось загрузить график: ${error.message ?: "ошибка базы данных"}")
@@ -87,6 +94,12 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(shifts = shifts.shifts, sessions = shifts.sessions,
                 payments = shifts.payments, workplaces = shifts.workplaces,
                 loadingError = null) }
+            // Do not undo an already persisted user operation if Android disallows alarms.
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    ShiftReminders.sync(getApplication<Application>().applicationContext, shifts.shifts)
+                }
+            }
             Result.success(Unit)
         } catch (error: Exception) {
             Result.failure(error)
@@ -109,6 +122,15 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun removePayment(id: Long): Result<Unit> =
         mutate { store.removePayment(id) }
+
+    suspend fun editFinishedSession(
+        id: Long, startMs: Long, endMs: Long, breakMinutes: Int
+    ): Result<Unit> = mutate {
+        store.editFinishedSession(id, startMs, endMs, breakMinutes)
+    }
+
+    suspend fun deleteFinishedSession(id: Long): Result<Unit> =
+        mutate { store.deleteFinishedSession(id) }
 
     suspend fun addWorkplace(name: String, hourlyKopecks: Long): Result<Unit> =
         mutate { store.addWorkplace(name, hourlyKopecks) }
@@ -138,6 +160,36 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     ): Result<Unit> = mutate {
         store.fillCustomPattern(anchor, CustomCycle(mask), startMinutes, endMinutes,
             hourlyKopecks, replaceExisting, workplaceId)
+    }
+
+    suspend fun exportMonthlyCsv(
+        uri: Uri, workplaceId: Long, month: YearMonth
+    ): Result<Unit> {
+        _uiState.update { it.copy(isBusy = true) }
+        return try {
+            writeMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    val workplace = store.workplaces().firstOrNull { it.id == workplaceId }
+                        ?: error("Место работы не найдено.")
+                    val csv = MonthlyCsv.generate(
+                        workplace,
+                        month,
+                        store.allSessions().filter { it.workplaceId == workplaceId },
+                        store.allPayments().filter { it.workplaceId == workplaceId },
+                        System.currentTimeMillis()
+                    )
+                    val output = resolver.openOutputStream(uri, "w")
+                        ?: throw IOException("Не удалось открыть CSV-файл.")
+                    output.use { it.write(byteArrayOf(0xEF.toByte(),0xBB.toByte(),0xBF.toByte()))
+                        it.write(csv.toByteArray(Charsets.UTF_8)) }
+                }
+            }
+            Result.success(Unit)
+        } catch (error: Exception) {
+            Result.failure(error)
+        } finally {
+            _uiState.update { it.copy(isBusy = false) }
+        }
     }
 
     suspend fun exportBackup(uri: Uri): Result<Unit> {
@@ -190,6 +242,11 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(shifts = updated.shifts, sessions = updated.sessions,
                 payments = updated.payments, workplaces = updated.workplaces,
                 loadingError = null) }
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    ShiftReminders.sync(getApplication<Application>().applicationContext, updated.shifts)
+                }
+            }
             Result.success(restored.shifts.size + restored.sessions.size + restored.payments.size)
         } catch (error: Exception) {
             Result.failure(error)
