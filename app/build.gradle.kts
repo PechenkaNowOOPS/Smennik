@@ -29,6 +29,8 @@ android {
                 storePassword = stableKeyPassword
                 keyAlias = "smennik"
                 keyPassword = stableKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
             }
         } else null
 

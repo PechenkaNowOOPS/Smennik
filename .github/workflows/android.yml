@@ -1,8 +1,5 @@
 name: Android Stable APK
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -32,6 +29,7 @@ jobs:
         run: |
           value="$(sed -n 's/^versionName=//p' version.properties)"
           echo "SMENNIK_VERSION=$value" >> "$GITHUB_ENV"
+          echo "SMENNIK_VERSION_CODE=$(sed -n 's/^versionCode=//p' version.properties)" >> "$GITHUB_ENV"
       - name: Unit tests
         run: gradle :app:testDebugUnitTest --stacktrace
       - name: Load persistent signing key
@@ -55,18 +53,29 @@ jobs:
         env:
           SMENNIK_SIGNING_PASSWORD: ${{ secrets.SMENNIK_KEYSTORE_PASSWORD }}
         run: gradle :app:assembleRelease --stacktrace
-      - name: Verify signature and pinned certificate
+      - name: Verify installability, signature and pinned certificate
         if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
           APK=app/build/outputs/apk/release/app-release.apk
-          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          "$APKSIGNER" verify --verbose --print-certs "$APK"
-          actual="$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          "$TOOLS/zipalign" -c -P 16 4 "$APK"
+          verification="$("$TOOLS/apksigner" verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$verification"
+          grep -Fq 'Verified using v1 scheme (JAR signing): true' <<< "$verification" || { echo "::error::Missing v1 signature"; exit 1; }
+          grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' <<< "$verification" || { echo "::error::Missing v2 signature"; exit 1; }
+          actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$verification")"
           expected="3396473c1ccd3a0c6ee483e098d1546bc759a2e92d01519f46930eedb4614b6f"
           if [[ "$actual" != "$expected" ]]; then
             echo "::error::Wrong signing certificate; release aborted."
+            exit 1
+          fi
+          package_info="$("$TOOLS/aapt" dump badging "$APK")"
+          expected_package="package: name='ru.smennik.app' versionCode='${SMENNIK_VERSION_CODE}' versionName='${SMENNIK_VERSION}'"
+          if ! grep -Fq "$expected_package" <<< "$package_info"; then
+            echo "::error::Wrong package ID, versionCode or versionName"
+            grep '^package:' <<< "$package_info" || true
             exit 1
           fi
       - name: Publish signed release APK
