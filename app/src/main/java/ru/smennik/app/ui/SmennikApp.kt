@@ -65,6 +65,7 @@ fun SmennikApp(
     onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean, Long) -> Result<Unit>,
     onCustomPattern: suspend (LocalDate, String, Int, Int, Long, Boolean, Long) -> Result<Unit>,
     onBulkPlan: suspend (BulkPlan) -> Result<Unit>,
+    onBulkMove: suspend (ShiftMove) -> Result<Unit>,
     onAddWorkplace: suspend (String, Long) -> Result<Unit>,
     onUpdatePayRules: suspend (Long, Int, Int, Int) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
@@ -212,7 +213,8 @@ fun SmennikApp(
                         filterWorkplaceId = selectedId.takeIf { it != 0L },
                         onEdit = { day, job -> editingWorkplaceId = job; editing = day },
                         onPattern = { day -> patternAnchor = day; showPatterns = true },
-                        onBulk = onBulkPlan
+                        onBulk = onBulkPlan,
+                        onMove = onBulkMove
                     )
                     tab == 2 -> FinanceScreen(
                         shifts = shiftsOfJob,

@@ -35,6 +35,14 @@ class PlanningTest {
         assertEquals(0,monthlySummary(listOf(WorkShift(day,DayType.VACATION)),
             YearMonth.of(2026,10)).shifts)
     }
+    @Test fun shiftMoveMustBeBoundedAndNonzero() {
+        val accepted = ShiftMove(2,listOf(day),7)
+        assertEquals(day.plusDays(7),accepted.dates.single().plusDays(accepted.offsetDays.toLong()))
+        try { ShiftMove(1,listOf(day),0); fail("must not allow no-op") }
+        catch (_: IllegalArgumentException) {}
+        try { ShiftMove(1,listOf(day),32); fail("must limit shift") }
+        catch (_: IllegalArgumentException) {}
+    }
     @Test fun bulkPlanningValidatesDatesAndEmployer() {
         try { BulkPlan(0,listOf(day),DayType.WORK); fail("should reject employer") }
         catch (_: IllegalArgumentException) {}

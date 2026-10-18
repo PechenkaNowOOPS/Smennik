@@ -68,7 +68,8 @@ fun ProfessionalCalendarScreen(
     filterWorkplaceId: Long?,
     onEdit: (LocalDate, Long) -> Unit,
     onPattern: (LocalDate) -> Unit,
-    onBulk: suspend (BulkPlan) -> Result<Unit>
+    onBulk: suspend (BulkPlan) -> Result<Unit>,
+    onMove: suspend (ShiftMove) -> Result<Unit>
 ) {
     var focus by remember { mutableStateOf(LocalDate.now()) }
     var mode by remember { mutableStateOf(CalendarMode.MONTH) }
@@ -78,11 +79,7 @@ fun ProfessionalCalendarScreen(
     var error by remember { mutableStateOf("") }
     val visible = if (filterWorkplaceId == null) shifts
         else shifts.filter { it.workplaceId == filterWorkplaceId }
-    val conflicts = remember(shifts) { findShiftConflicts(shifts) }
-    val conflictingDays = conflicts.flatMap { listOf(
-        it.first.date, it.second.date,
-        it.from.toLocalDate()
-    ) }.toSet()
+    val allConflicts = remember(shifts) { findShiftConflicts(shifts) }
     val byDate = remember(visible) { visible.groupBy { it.date } }
     val currentMonth = YearMonth.from(focus)
     val monthSummary = monthlySummary(visible, currentMonth)
@@ -98,6 +95,17 @@ fun ProfessionalCalendarScreen(
         }
         CalendarMode.DAY -> listOf(focus)
     }
+    val dateSet = dates.toSet()
+    val conflicts = allConflicts.filter { conflict ->
+        (filterWorkplaceId == null ||
+            conflict.first.workplaceId == filterWorkplaceId ||
+            conflict.second.workplaceId == filterWorkplaceId) &&
+        (conflict.first.date in dateSet || conflict.second.date in dateSet ||
+            conflict.from.toLocalDate() in dateSet)
+    }
+    val conflictingDays = conflicts.flatMap {
+        listOf(it.first.date,it.second.date,it.from.toLocalDate())
+    }.toSet()
     val completedDays = remember(sessions) {
         sessions.filter { !it.isRunning }.map { it.date }.toSet()
     }
@@ -229,7 +237,8 @@ fun ProfessionalCalendarScreen(
             Text("Выбрано дней: ${selected.size}. Нажимай на клетки календаря.",
                 color = muted, fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                Button(enabled = selected.isNotEmpty(), onClick = { showBulk = true },
+                Button(enabled = selected.isNotEmpty() && selected.size <= 93,
+                    onClick = { showBulk = true },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = bg)) {
                     Text("Изменить (${selected.size})")
@@ -304,6 +313,15 @@ fun ProfessionalCalendarScreen(
                     showBulk = false
                 }
                 result
+            },
+            onMove = { move ->
+                val result = onMove(move)
+                if (result.isSuccess) {
+                    selected = emptySet()
+                    batchMode = false
+                    showBulk = false
+                }
+                result
             }
         )
     }
@@ -315,7 +333,8 @@ private fun BulkEditDialog(
     workplaces: List<Workplace>,
     defaultJob: Long,
     onDismiss: () -> Unit,
-    onApply: suspend (BulkPlan) -> Result<Unit>
+    onApply: suspend (BulkPlan) -> Result<Unit>,
+    onMove: suspend (ShiftMove) -> Result<Unit>
 ) {
     var employer by remember { mutableLongStateOf(defaultJob) }
     var kind by remember { mutableStateOf<DayType?>(DayType.WORK) }
@@ -325,6 +344,8 @@ private fun BulkEditDialog(
         mutableStateOf(((workplaces.firstOrNull { it.id == employer }?.hourlyKopecks
             ?: 35_000L) / 100).toString())
     }
+    var moveMode by remember { mutableStateOf(false) }
+    var offsetText by remember { mutableStateOf("1") }
     var overwrite by remember { mutableStateOf(false) }
     var confirmed by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
@@ -345,7 +366,22 @@ private fun BulkEditDialog(
                         label = { Text(workplace.name) }
                     )
                 }
-                listOf(
+                FilterChip(
+                    selected = moveMode,
+                    onClick = { moveMode = !moveMode },
+                    label = { Text("↪ Перенести выбранные записи на другие даты") }
+                )
+                if (moveMode) OutlinedTextField(
+                    value = offsetText,
+                    onValueChange = { value ->
+                        if (value.length <= 3 && value.all { it.isDigit() || it == '-' })
+                            offsetText = value
+                    },
+                    label = { Text("На сколько дней перенести (−31 … +31)") },
+                    supportingText = { Text("Положительное число — вперёд, отрицательное — назад") },
+                    singleLine = true
+                )
+                if (!moveMode) listOf(
                     DayType.WORK to "Рабочие смены",
                     DayType.OFF to "Выходные",
                     DayType.VACATION to "Отпуск",
@@ -356,7 +392,7 @@ private fun BulkEditDialog(
                     FilterChip(selected = kind == value, onClick = { kind = value },
                         label = { Text(title) })
                 }
-                if (kind == DayType.WORK) {
+                if (!moveMode && kind == DayType.WORK) {
                     OutlinedTextField(value = start, onValueChange = { start = it },
                         label = { Text("Начало ЧЧ:ММ") }, singleLine = true)
                     OutlinedTextField(value = finish, onValueChange = { finish = it },
@@ -377,31 +413,52 @@ private fun BulkEditDialog(
                         Text("Подтверждаю замену записей. Сделал(а) резервную копию.",
                             color = softRed, fontSize = 12.sp)
                     }
-                } else Text("Уже заполненные дни будут пропущены. " +
-                    "Для удаления записей включи перезапись.", color = muted, fontSize = 12.sp)
+                } else Text(if (moveMode) "Все выбранные дни должны содержать записи. " +
+                    "Занятые даты назначения не будут заменены без подтверждения."
+                    else "Уже заполненные дни будут пропущены. " +
+                        "Для удаления записей включи перезапись.",
+                    color = muted, fontSize = 12.sp)
                 if (error.isNotEmpty()) Text(error, color = softRed, fontSize = 12.sp)
             }
         },
         confirmButton = {
             Button(enabled = !saving && (!overwrite || confirmed) && workplaces.isNotEmpty(),
                 onClick = {
-                    val from = if (kind == DayType.WORK) parseTime(start) else 480
-                    val until = if (kind == DayType.WORK) parseTime(finish) else 1200
-                    val rubles = pay.toLongOrNull()
-                    if (from == null || until == null || rubles == null ||
-                        rubles !in 0..100_000) {
-                        error = "Проверь время и ставку."
-                    } else {
-                        saving = true
-                        scope.launch {
-                            onApply(BulkPlan(employer,dates,kind,from,until,rubles * 100,overwrite))
-                                .fold(
+                    if (moveMode) {
+                        val offset = offsetText.toIntOrNull()
+                        if (offset == null || offset == 0 || offset !in -31..31) {
+                            error = "Укажи смещение от −31 до 31 дней, кроме нуля."
+                        } else {
+                            saving = true
+                            scope.launch {
+                                onMove(ShiftMove(employer,dates,offset,overwrite)).fold(
                                     onSuccess = { onDismiss() },
                                     onFailure = {
-                                        error = it.message ?: "Не удалось изменить дни"
+                                        error = it.message ?: "Не удалось перенести записи"
                                         saving = false
                                     }
                                 )
+                            }
+                        }
+                    } else {
+                        val from = if (kind == DayType.WORK) parseTime(start) else 480
+                        val until = if (kind == DayType.WORK) parseTime(finish) else 1200
+                        val rubles = pay.toLongOrNull()
+                        if (from == null || until == null || rubles == null ||
+                            rubles !in 0..100_000) {
+                            error = "Проверь время и ставку."
+                        } else {
+                            saving = true
+                            scope.launch {
+                                onApply(BulkPlan(employer,dates,kind,from,until,rubles * 100,overwrite))
+                                    .fold(
+                                        onSuccess = { onDismiss() },
+                                        onFailure = {
+                                            error = it.message ?: "Не удалось изменить дни"
+                                            saving = false
+                                        }
+                                    )
+                            }
                         }
                     }
                 }) {

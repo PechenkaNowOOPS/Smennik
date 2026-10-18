@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import ru.smennik.app.domain.ShiftMove
 import ru.smennik.app.domain.BulkPlan
 import ru.smennik.app.domain.CustomCycle
 import ru.smennik.app.domain.Workplace
@@ -142,6 +143,9 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun applyBulkPlan(plan: BulkPlan): Result<Unit> =
         mutate { store.applyBulkPlan(plan) }
+
+    suspend fun movePlannedShifts(move: ShiftMove): Result<Unit> =
+        mutate { store.movePlannedShifts(move) }
 
     suspend fun save(shift: WorkShift): Result<Unit> = mutate { store.save(shift) }
     suspend fun remove(date: LocalDate, workplaceId: Long = 1): Result<Unit> =

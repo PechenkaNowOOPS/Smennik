@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import ru.smennik.app.domain.ShiftMove
 import ru.smennik.app.domain.BulkPlan
 import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.CustomCycle
@@ -397,6 +398,51 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
             }
             db.setTransactionSuccessful()
             return changed
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /**
+     * Atomic calendar move: delete source dates and place them at offset dates.
+     * If any target is occupied and overwrite was not approved, roll back all rows.
+     */
+    fun movePlannedShifts(move: ShiftMove): Int {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            ensureWorkplace(db, move.workplaceId)
+            val originals = all().filter {
+                it.workplaceId == move.workplaceId && it.date in move.dates
+            }
+            require(originals.size == move.dates.size) {
+                "Можно переносить только дни, в которых есть записи графика."
+            }
+            val table = if (move.workplaceId == 1L) "shifts" else "workplace_shifts"
+            val where = if (move.workplaceId == 1L) "date=?" else "date=? AND workplace_id=?"
+            fun args(date: LocalDate): Array<String> =
+                if (move.workplaceId == 1L) arrayOf(date.toString())
+                else arrayOf(date.toString(), move.workplaceId.toString())
+            originals.forEach { source ->
+                check(db.delete(table,where,args(source.date)) == 1)
+            }
+            originals.forEach { source ->
+                val target = source.copy(
+                    date = source.date.plusDays(move.offsetDays.toLong()),
+                    origin = ShiftOrigin.MANUAL
+                )
+                val conflict = db.query(table,arrayOf("date"),where,args(target.date),
+                    null,null,null).use { it.moveToFirst() }
+                if (conflict && !move.replaceDestinations) {
+                    error("На ${target.date} уже есть запись. Разрешите замену или выберите другой период.")
+                }
+                val outcome = db.insertWithOnConflict(table,null,values(target),
+                    if (move.replaceDestinations) SQLiteDatabase.CONFLICT_REPLACE else
+                        SQLiteDatabase.CONFLICT_ABORT)
+                check(outcome != -1L)
+            }
+            db.setTransactionSuccessful()
+            return originals.size
         } finally {
             db.endTransaction()
         }

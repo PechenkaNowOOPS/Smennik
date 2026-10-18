@@ -45,3 +45,17 @@ data class BulkPlan(
         require(hourlyKopecks in 0..10_000_000)
     }
 }
+
+/** Displace existing planned entries by a fixed number of calendar days. */
+data class ShiftMove(
+    val workplaceId: Long,
+    val dates: List<LocalDate>,
+    val offsetDays: Int,
+    val replaceDestinations: Boolean = false
+) {
+    init {
+        require(workplaceId > 0)
+        require(dates.isNotEmpty() && dates.size <= 93 && dates.toSet().size == dates.size)
+        require(offsetDays in -31..31 && offsetDays != 0)
+    }
+}
