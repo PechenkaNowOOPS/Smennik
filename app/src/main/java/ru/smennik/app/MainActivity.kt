@@ -8,8 +8,16 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import ru.smennik.app.data.ShiftViewModel
 import ru.smennik.app.ui.SmennikApp
+import androidx.lifecycle.ViewModelProvider
 
 class MainActivity : ComponentActivity() {
+    // Actions triggered from the notification mutate the same SQLite DB outside Compose.
+    // Refresh on returning to the activity to display the authoritative timer state.
+    override fun onResume() {
+        super.onResume()
+        ViewModelProvider(this)[ShiftViewModel::class.java].reload()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {

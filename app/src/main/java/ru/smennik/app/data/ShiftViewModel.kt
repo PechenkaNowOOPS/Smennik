@@ -24,6 +24,7 @@ import ru.smennik.app.domain.PaymentType
 import ru.smennik.app.domain.WorkPattern
 import ru.smennik.app.domain.WorkShift
 import ru.smennik.app.reminders.ShiftReminders
+import ru.smennik.app.reminders.WorkdayNotifications
 import ru.smennik.app.widgets.ShiftWidgetUpdater
 import java.time.YearMonth
 import java.io.ByteArrayOutputStream
@@ -77,6 +78,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
                     runCatching {
                         ShiftReminders.sync(getApplication<Application>().applicationContext, snapshot.shifts)
                         ShiftWidgetUpdater.updateAll(getApplication<Application>().applicationContext)
+                        WorkdayNotifications.sync(getApplication<Application>().applicationContext)
                     }
                 }
             } catch (error: Exception) {
@@ -104,6 +106,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching {
                     ShiftReminders.sync(getApplication<Application>().applicationContext, shifts.shifts)
                     ShiftWidgetUpdater.updateAll(getApplication<Application>().applicationContext)
+                    WorkdayNotifications.sync(getApplication<Application>().applicationContext)
                 }
             }
             Result.success(Unit)
@@ -275,6 +278,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching {
                     ShiftReminders.sync(getApplication<Application>().applicationContext, updated.shifts)
                     ShiftWidgetUpdater.updateAll(getApplication<Application>().applicationContext)
+                    WorkdayNotifications.sync(getApplication<Application>().applicationContext)
                 }
             }
             Result.success(restored.shifts.size + restored.sessions.size + restored.payments.size)
