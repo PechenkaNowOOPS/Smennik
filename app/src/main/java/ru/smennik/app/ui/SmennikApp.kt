@@ -199,6 +199,7 @@ fun SmennikApp(
                         onTogglePause = { id -> launchOperation { onTogglePause(id) } },
                         onFinishWork = { id -> launchOperation { onFinishWork(id) } },
                         onEdit = { editingWorkplaceId = selectedId; editing = it },
+                        onRepeatShift = { copy -> launchOperation { onSave(copy) } },
                         onCalendar = { tab = 1 },
                         onAbout = { showAbout = true },
                         onReminders = { showReminders = true },
@@ -477,6 +478,7 @@ private fun HomeScreen(
     onTogglePause: (Long) -> Unit,
     onFinishWork: (Long) -> Unit,
     onEdit: (LocalDate) -> Unit,
+    onRepeatShift: (WorkShift) -> Unit,
     onCalendar: () -> Unit,
     onAbout: () -> Unit,
     onReminders: () -> Unit,
@@ -493,6 +495,9 @@ private fun HomeScreen(
     }
     val today = now.toLocalDate()
     val todayEntry = shifts.firstOrNull { it.date == today }
+    val previousWorkShift = shifts.filter { it.type == DayType.WORK && it.date.isBefore(today) }
+        .maxByOrNull { it.date }
+    var repeatCandidate by remember { mutableStateOf<WorkShift?>(null) }
     val active = activeShiftAt(shifts, now)
     val todayShift = todayEntry?.takeIf { it.type == DayType.WORK }
     val currentShift = active ?: todayShift
@@ -550,6 +555,15 @@ private fun HomeScreen(
             }
         }
 
+        if (todayEntry == null && previousWorkShift != null) {
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isBusy,
+                onClick = { repeatCandidate = previousWorkShift }) {
+                Text("↻ Повторить последнюю смену на сегодня", color = lime)
+            }
+        }
         Spacer(Modifier.height(16.dp))
         Card(
             colors = CardDefaults.cardColors(containerColor = surface),
@@ -711,6 +725,26 @@ private fun HomeScreen(
             color = textMuted, fontSize = 12.sp, textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(16.dp))
+    }
+    repeatCandidate?.let { source ->
+        AlertDialog(
+            onDismissRequest = { repeatCandidate = null },
+            title = { Text("Повторить смену?") },
+            text = {
+                Text("Добавить рабочий день на ${today.format(dayFormatter)} " +
+                    "с ${displayTime(source.startMinutes)} до ${displayTime(source.endMinutes)} " +
+                    "по ставке ${rubles(source.hourlyKopecks)} в час?")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    onRepeatShift(source.copy(date = today, origin = ShiftOrigin.MANUAL))
+                    repeatCandidate = null
+                }) { Text("Добавить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { repeatCandidate = null }) { Text("Отмена") }
+            }
+        )
     }
 }
 
