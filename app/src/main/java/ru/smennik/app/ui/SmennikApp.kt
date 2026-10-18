@@ -1156,6 +1156,25 @@ private fun StatisticsScreen(
         MoneyCard("Премии", rubles(actual.manualBonusesKopecks))
         MoneyCard("Удержания", rubles(actual.deductionsKopecks))
         MoneyCard("Итого начислено", rubles(actual.earnedKopecks), highlighted = true)
+        val paidHours = actual.minutes / 60.0
+        if (paidHours > 0) MoneyCard(
+            "Средний доход за час",
+            rubles((actual.earnedKopecks / paidHours).toLong()),
+            hint = "Все начисления с учётом надбавок и премий."
+        )
+        if (month == YearMonth.now()) {
+            val nextPlanned = shifts.filter {
+                it.type == DayType.WORK &&
+                    YearMonth.from(it.date) == month &&
+                    it.date.isAfter(LocalDate.now())
+            }.sumOf { it.projectedKopecks }
+            MoneyCard(
+                "Прогноз на конец месяца",
+                rubles(actual.earnedKopecks + nextPlanned),
+                hint = "Заработанное к текущему моменту + плановые будущие смены. " +
+                    "Налоги и будущие надбавки не прогнозируются."
+            )
+        }
         Text(
             "Фактическое время считается по запускам и завершениям таймера; перерывы исключаются. " +
                 "Ночные смены учитываются по дате их начала.",
