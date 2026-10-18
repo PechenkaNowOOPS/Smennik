@@ -4,7 +4,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.YearMonth
 
-enum class DayType { WORK, OFF }
+enum class DayType { WORK, OFF, VACATION, SICK, HOLIDAY }
 
 /** Manually changed days are never replaced by ordinary pattern regeneration. */
 enum class ShiftOrigin { MANUAL, GENERATED }
@@ -26,7 +26,7 @@ data class WorkShift(
 
     /** Matching clock times mean a full 24-hour shift, not a zero-duration shift. */
     val durationMinutes: Int
-        get() = if (type == DayType.OFF) 0
+        get() = if (type != DayType.WORK) 0
         else (endMinutes - startMinutes + 1440).let { if (it == 1440) 1440 else it % 1440 }
 
     val startsAt: LocalDateTime get() = date.atStartOfDay().plusMinutes(startMinutes.toLong())

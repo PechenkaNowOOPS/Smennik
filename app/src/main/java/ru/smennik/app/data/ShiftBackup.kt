@@ -16,7 +16,7 @@ import java.time.LocalDate
 object ShiftBackup {
     const val MAX_BYTES = 5 * 1024 * 1024
     private const val FORMAT = "ru.smennik.backup"
-    private const val VERSION = 5
+    private const val VERSION = 6
     private const val MAX_SHIFTS = 100_000
 
     data class Snapshot(

@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import ru.smennik.app.domain.BulkPlan
 import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.CustomCycle
 import ru.smennik.app.domain.WorkSession
@@ -363,6 +364,42 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         val id = db.insertWithOnConflict(table,null,
             values(shift.copy(origin=ShiftOrigin.MANUAL)), SQLiteDatabase.CONFLICT_REPLACE)
         check(id != -1L) { "Не удалось сохранить смену" }
+    }
+
+    /**
+     * One SQLite transaction per batch; skip existing dates unless the user explicitly
+     * confirms overwriting them. No writes to other workplaces or session/pay records.
+     */
+    fun applyBulkPlan(plan: BulkPlan): Int {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            ensureWorkplace(db, plan.workplaceId)
+            val table = if (plan.workplaceId == 1L) "shifts" else "workplace_shifts"
+            var changed = 0
+            plan.dates.forEach { day ->
+                val where = if (plan.workplaceId == 1L) "date = ?" else
+                    "date = ? AND workplace_id = ?"
+                val args = if (plan.workplaceId == 1L) arrayOf(day.toString()) else
+                    arrayOf(day.toString(), plan.workplaceId.toString())
+                val existing = db.query(table,arrayOf("date"),where,args,
+                    null,null,null).use { it.moveToFirst() }
+                if (existing && !plan.replaceExisting) return@forEach
+                if (plan.type == null) {
+                    if (existing) changed += db.delete(table,where,args)
+                } else {
+                    val entry = WorkShift(day,plan.type,plan.startMinutes,plan.endMinutes,
+                        plan.hourlyKopecks,ShiftOrigin.MANUAL,plan.workplaceId)
+                    check(db.insertWithOnConflict(table,null,values(entry),
+                        SQLiteDatabase.CONFLICT_REPLACE) != -1L)
+                    changed++
+                }
+            }
+            db.setTransactionSuccessful()
+            return changed
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun remove(date: LocalDate, workplaceId: Long = 1) {
