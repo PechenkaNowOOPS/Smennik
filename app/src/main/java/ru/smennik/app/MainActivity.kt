@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
                 onBulkMove = model::movePlannedShifts,
                 onAddWorkplace = model::addWorkplace,
                 onUpdatePayRules = model::updatePayRules,
+                onUpdateMonthlyGoal = model::updateMonthlyGoal,
                 onExportBackup = model::exportBackup,
                 onImportBackup = model::importBackup,
                 onStartWork = model::startWork,

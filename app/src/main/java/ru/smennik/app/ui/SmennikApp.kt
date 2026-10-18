@@ -68,6 +68,7 @@ fun SmennikApp(
     onBulkMove: suspend (ShiftMove) -> Result<Unit>,
     onAddWorkplace: suspend (String, Long) -> Result<Unit>,
     onUpdatePayRules: suspend (Long, Int, Int, Int) -> Result<Unit>,
+    onUpdateMonthlyGoal: suspend (Long, Long) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
     onImportBackup: suspend (Uri) -> Result<Int>,
     onStartWork: suspend (LocalDate, Long, Long) -> Result<Unit>,
@@ -190,6 +191,7 @@ fun SmennikApp(
                         payments = paymentsOfJob,
                         isBusy = state.isBusy,
                         defaultRate = selectedWorkplace.hourlyKopecks,
+                        workplace = selectedWorkplace,
                         activeElsewhere = state.sessions.any { it.isRunning && it.workplaceId != selectedId },
                         onStartWork = { date, rate ->
                             launchOperation { onStartWork(date, rate, selectedId) }
@@ -228,7 +230,8 @@ fun SmennikApp(
                         onRemovePayment = { id -> launchOperation { onRemovePayment(id) } },
                         onUpdateRules = { night, extra, limit ->
                             onUpdatePayRules(selectedId, night, extra, limit)
-                        }
+                        },
+                        onUpdateGoal = { amount -> onUpdateMonthlyGoal(selectedId,amount) }
                     )
                     else -> if (selectedId == 0L) AllWorkStatisticsScreen(
                         shifts = state.shifts,
@@ -376,6 +379,7 @@ private fun AddWorkplaceDialog(
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.7.0", "Два офлайн-виджета Android, финансовая цель по каждому работодателю и прогресс в процентах."),
     VersionNote("0.6.0", "Общий календарь, недельный и дневной режимы, конфликты, массовое планирование и аналитика."),
     VersionNote("0.5.0", "Уведомления о сменах, история и исправление фактического времени, CSV-отчёты, обзор недели."),
     VersionNote("0.4.0", "Настройка ночных доплат и переработок, премии, удержания, подробный расчёт зарплаты."),
@@ -467,6 +471,7 @@ private fun HomeScreen(
     payments: List<WagePayment>,
     isBusy: Boolean,
     defaultRate: Long,
+    workplace: Workplace,
     activeElsewhere: Boolean,
     onStartWork: (LocalDate, Long) -> Unit,
     onTogglePause: (Long) -> Unit,
@@ -495,7 +500,9 @@ private fun HomeScreen(
         .minByOrNull { it.date }
     val summary = monthlySummary(shifts, YearMonth.from(today))
     val activeSession = sessions.firstOrNull { it.isRunning }
-    val actualSummary = actualMonthSummary(sessions, payments, YearMonth.from(today), System.currentTimeMillis())
+    val actualSummary = actualMonthSummary(sessions, payments, YearMonth.from(today),
+        System.currentTimeMillis(),workplace)
+    val goal = workplace.monthlyGoalKopecks
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)
@@ -647,11 +654,30 @@ private fun HomeScreen(
                     color = textMuted, fontSize = 12.sp)
             }
         }
+        if (goal > 0L) {
+            Spacer(Modifier.height(12.dp))
+            Card(colors = CardDefaults.cardColors(containerColor = surface),
+                modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("ЦЕЛЬ НА МЕСЯЦ", color = textMuted, fontSize = 12.sp)
+                    val progress = GoalProgress(actualSummary.earnedKopecks,goal)
+                    Text("${progress.progressPercent}% · осталось ${rubles(progress.remainingKopecks)}",
+                        color = lime, fontWeight = FontWeight.Bold)
+                    LinearProgressIndicator(
+                        progress = { (progress.progressPercent / 100f).coerceIn(0f,1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(20.dp))
         OutlinedButton(onClick = onReminders, modifier = Modifier.fillMaxWidth(),
             border = BorderStroke(1.dp, Color(0xFF5A6A76))) {
             Text("🔔 Напоминания о сменах", color = lime)
         }
+        Text("Виджеты «Ближайшая смена» и «Заработок» добавляются через меню " +
+            "виджетов рабочего стола Android.", color = textMuted,
+            fontSize = 12.sp)
         Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = onPattern, modifier = Modifier.fillMaxWidth(), border = BorderStroke(1.dp, lime)) {
             Text("⚡ Создать график 2/2, 3/3…", color = lime)
@@ -804,11 +830,13 @@ private fun FinanceScreen(
     isBusy: Boolean,
     onPayment: (LocalDate, Long, PaymentType) -> Unit,
     onRemovePayment: (Long) -> Unit,
-    onUpdateRules: suspend (Int, Int, Int) -> Result<Unit>
+    onUpdateRules: suspend (Int, Int, Int) -> Result<Unit>,
+    onUpdateGoal: suspend (Long) -> Result<Unit>
 ) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     var addDialog by remember { mutableStateOf(false) }
     var rulesDialog by remember { mutableStateOf(false) }
+    var goalDialog by remember { mutableStateOf(false) }
     var removeDialog by remember { mutableStateOf<WagePayment?>(null) }
     val now = System.currentTimeMillis()
     val planned = monthlySummary(shifts, month)
@@ -824,6 +852,26 @@ private fun FinanceScreen(
         MonthSelector(month, onPrev = { month = month.minusMonths(1) },
             onNext = { month = month.plusMonths(1) })
         MoneyCard("Плановый доход", rubles(planned.projectedKopecks))
+        val goal = GoalProgress(actual.earnedKopecks,workplace.monthlyGoalKopecks)
+        if (goal.hasGoal) {
+            Card(colors = CardDefaults.cardColors(containerColor = surface),
+                modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp),verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("ЦЕЛЬ НА МЕСЯЦ",color = textMuted,fontSize = 12.sp)
+                    Text(rubles(goal.goalKopecks),fontWeight = FontWeight.Bold,fontSize = 23.sp)
+                    LinearProgressIndicator(
+                        progress = { (goal.progressPercent / 100f).coerceIn(0f,1f) },
+                        modifier = Modifier.fillMaxWidth())
+                    Text("${goal.progressPercent}% выполнено · осталось ${rubles(goal.remainingKopecks)}",
+                        color=lime,fontSize=13.sp)
+                }
+            }
+        }
+        OutlinedButton(onClick = { goalDialog = true },enabled = !isBusy,
+            modifier = Modifier.fillMaxWidth()) {
+            Text(if (goal.hasGoal) "Изменить цель по заработку" else "＋ Задать цель по заработку",
+                color = lime)
+        }
         MoneyCard("Основное начисление", rubles(actual.baseKopecks))
         MoneyCard("Ночные часы (22:00–06:00)", rubles(actual.nightBonusKopecks),
             hint = "${actual.nightMinutes} мин · надбавка ${workplace.nightBonusPercent}%")
@@ -868,6 +916,14 @@ private fun FinanceScreen(
             }
         }
         Spacer(Modifier.height(16.dp))
+    }
+    if (goalDialog) {
+        MonthlyGoalDialog(
+            currentGoal = workplace.monthlyGoalKopecks,
+            isBusy = isBusy,
+            onDismiss = { goalDialog = false },
+            onSave = onUpdateGoal
+        )
     }
     if (rulesDialog) {
         PayRulesDialog(
@@ -1201,6 +1257,59 @@ private fun MonthSelector(month: YearMonth, onPrev: () -> Unit, onNext: () -> Un
     }
 }
 
+
+
+@Composable
+private fun MonthlyGoalDialog(
+    currentGoal: Long,
+    isBusy: Boolean,
+    onDismiss: () -> Unit,
+    onSave: suspend (Long) -> Result<Unit>
+) {
+    var rublesInput by remember(currentGoal) { mutableStateOf((currentGoal / 100L).toString()) }
+    var error by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text("Финансовая цель") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Укажи, сколько планируешь заработать в месяц на этой работе. " +
+                    "Цель сохраняется в базе и резервной копии.", color = textMuted)
+                OutlinedTextField(
+                    value = rublesInput,
+                    onValueChange = { if (it.length <= 9 && it.all(Char::isDigit)) rublesInput = it },
+                    label = { Text("Цель за месяц, ₽") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                Text("Значение 0 отключает отслеживание цели.",
+                    color = textMuted,fontSize = 12.sp)
+                if (error.isNotEmpty()) Text(error,color = Color(0xFFFF8585))
+            }
+        },
+        confirmButton = {
+            Button(enabled = !isBusy && !saving, onClick = {
+                val value = rublesInput.toLongOrNull()
+                if (value == null || value !in 0L..100_000_000L) {
+                    error = "Укажи число от 0 до 100 000 000."
+                } else {
+                    saving = true
+                    scope.launch {
+                        onSave(value * 100L).fold(
+                            onSuccess = { onDismiss() },
+                            onFailure = { error = it.message ?: "Ошибка сохранения"; saving = false }
+                        )
+                    }
+                }
+            }) { Text(if (saving) "Сохранение…" else "Сохранить") }
+        },
+        dismissButton = {
+            TextButton(enabled = !saving,onClick = onDismiss) { Text("Отмена") }
+        }
+    )
+}
 
 @Composable
 private fun PayRulesDialog(

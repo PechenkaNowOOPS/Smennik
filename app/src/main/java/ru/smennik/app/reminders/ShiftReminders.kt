@@ -15,6 +15,7 @@ import ru.smennik.app.MainActivity
 import ru.smennik.app.data.ShiftStore
 import ru.smennik.app.domain.DayType
 import ru.smennik.app.domain.WorkShift
+import ru.smennik.app.widgets.ShiftWidgetUpdater
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -176,6 +177,7 @@ class ReminderReceiver : BroadcastReceiver() {
                         Intent.ACTION_MY_PACKAGE_REPLACED
                     )) {
                     ShiftReminders.syncFromDatabase(context)
+                    ShiftWidgetUpdater.updateAll(context)
                 }
             } catch (_: Exception) {
                 // Android will retry scheduling when the app opens or data changes.
