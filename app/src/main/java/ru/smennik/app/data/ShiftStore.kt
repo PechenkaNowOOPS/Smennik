@@ -211,11 +211,14 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
      */
     fun addManualSession(
         workplaceId: Long, startMs: Long, endMs: Long, hourlyKopecks: Long,
-        breaks: List<WorkBreak>
+        breaks: List<WorkBreak>, legacyMinutes: Int = 0
     ) {
         require(startMs > 0 && endMs > startMs && endMs-startMs <= 48L*60*60*1000)
         require(hourlyKopecks in 0..10_000_000L)
         validateBreaks(startMs,endMs,breaks)
+        require(legacyMinutes in 0..2880)
+        val unpaid = breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs }
+        require(unpaid + legacyMinutes*60_000L < endMs-startMs)
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -227,7 +230,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                 put("started_ms",startMs)
                 put("ended_ms",endMs)
                 putNull("pause_started_ms")
-                put("total_paused_ms",breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs })
+                put("total_paused_ms",unpaid+legacyMinutes*60_000L)
                 put("hourly_kopecks",hourlyKopecks)
             })
             insertBreaks(db,id,breaks)
@@ -237,11 +240,14 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
 
     fun editFinishedSessionDetailed(
         id: Long, startMs: Long, endMs: Long, hourlyKopecks: Long,
-        breaks: List<WorkBreak>
+        breaks: List<WorkBreak>, legacyMinutes: Int = 0
     ) {
         require(startMs > 0 && endMs > startMs && endMs-startMs <= 48L*60*60*1000)
         require(hourlyKopecks in 0..10_000_000L)
         validateBreaks(startMs,endMs,breaks)
+        require(legacyMinutes in 0..2880)
+        val unpaid = breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs }
+        require(unpaid + legacyMinutes*60_000L < endMs-startMs)
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -251,7 +257,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                 put("started_ms",startMs)
                 put("ended_ms",endMs)
                 putNull("pause_started_ms")
-                put("total_paused_ms",breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs })
+                put("total_paused_ms",unpaid+legacyMinutes*60_000L)
                 put("hourly_kopecks",hourlyKopecks)
             }
             check(db.update("work_sessions",values,"id=? AND ended_ms IS NOT NULL",
@@ -358,7 +364,8 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                 require(nowMs >= item.pauseStartedMs)
                 cv.putNull("pause_started_ms")
                 cv.put("total_paused_ms", item.totalPausedMs + nowMs - item.pauseStartedMs)
-                insertBreaks(db,id,listOf(WorkBreak(item.pauseStartedMs,nowMs)))
+                if (nowMs > item.pauseStartedMs)
+                    insertBreaks(db,id,listOf(WorkBreak(item.pauseStartedMs,nowMs)))
             }
             check(db.update("work_sessions", cv, "id = ? AND ended_ms IS NULL",
                 arrayOf(id.toString())) == 1)
