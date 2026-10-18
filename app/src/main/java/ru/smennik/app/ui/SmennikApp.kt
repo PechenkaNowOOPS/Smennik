@@ -8,6 +8,7 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.smennik.app.reminders.ShiftReminders
+import ru.smennik.app.reminders.WorkdayNotifications
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -493,13 +494,18 @@ private fun HomeScreen(
     onExport: () -> Unit,
     onImport: () -> Unit
 ) {
-    var now by remember { mutableStateOf(LocalDateTime.now()) }
-    LaunchedEffect(Unit) {
+    val activeSession = sessions.firstOrNull { it.isRunning }
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    // The timer shows seconds while a session runs and updates the date otherwise.
+    // Timestamp arithmetic uses persisted times and survives background/force-stop.
+    LaunchedEffect(activeSession?.id, activeSession?.isPaused) {
+        nowMs = System.currentTimeMillis()
         while (true) {
-            delay(60_000L)
-            now = LocalDateTime.now()
+            delay(if (activeSession == null) 60_000L else 1000L)
+            nowMs = System.currentTimeMillis()
         }
     }
+    val now = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMs),ZoneId.systemDefault())
     val today = now.toLocalDate()
     val todayEntry = shifts.firstOrNull { it.date == today }
     val previousWorkShift = shifts.filter { it.type == DayType.WORK && it.date.isBefore(today) }
@@ -511,9 +517,16 @@ private fun HomeScreen(
     val nextShift = shifts.filter { !it.date.isBefore(today) && it.type == DayType.WORK }
         .minByOrNull { it.date }
     val summary = monthlySummary(shifts, YearMonth.from(today))
-    val activeSession = sessions.firstOrNull { it.isRunning }
     val actualSummary = actualMonthSummary(sessions, payments, YearMonth.from(today),
-        System.currentTimeMillis(),workplace)
+        nowMs,workplace)
+    val notificationContext = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            runCatching { WorkdayNotifications.sync(notificationContext) }
+        }
+    }
     val goal = workplace.monthlyGoalKopecks
 
     Column(
@@ -597,13 +610,48 @@ private fun HomeScreen(
                         "Без графика используется ставка выбранного места работы.",
                         color = textMuted, fontSize = 12.sp)
                 } else {
-                    Text(if (activeSession.isPaused) "● Перерыв" else "● Идёт смена",
-                        color = if (activeSession.isPaused) Color(0xFFFFC47A) else lime)
-                    val mins = activeSession.workedMinutes(System.currentTimeMillis())
-                    Text("${mins / 60} ч ${mins % 60} мин", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    Text(if (activeSession.isPaused) "● ПЕРЕРЫВ" else "● СМЕНА ИДЁТ",
+                        color = if (activeSession.isPaused) Color(0xFFFFC47A) else lime,
+                        fontWeight = FontWeight.Bold)
+                    val countedMs = (nowMs - activeSession.startedMs -
+                        activeSession.totalPausedMs -
+                        (activeSession.pauseStartedMs?.let { nowMs - it } ?: 0L))
+                        .coerceAtLeast(0L)
+                    val workedSeconds = countedMs / 1000L
+                    val mins = workedSeconds / 60L
+                    Text(
+                        "%02d:%02d:%02d".format(
+                            workedSeconds / 3600L,
+                            (workedSeconds / 60L) % 60L, workedSeconds % 60L),
+                        fontSize = 38.sp, color = lime, fontWeight = FontWeight.ExtraBold
+                    )
                     Text("Начало: ${Instant.ofEpochMilli(activeSession.startedMs)
-                        .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd.MM HH:mm"))} · " +
-                        "Заработано: ${rubles(activeSession.earnedKopecks(System.currentTimeMillis()))}",
+                        .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd.MM HH:mm"))}",
+                        color = textMuted, fontSize = 13.sp)
+                    Text("Заработано: ${rubles(activeSession.earnedKopecks(nowMs))}",
+                        color = lime, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    val matchingPlan = shifts.firstOrNull {
+                        it.date == activeSession.date && it.type == DayType.WORK
+                    }
+                    if (matchingPlan != null) {
+                        val limit = matchingPlan.durationMinutes.toLong()
+                        LinearProgressIndicator(
+                            progress = { (mins.toFloat() / limit.coerceAtLeast(1)).coerceIn(0f,1f) },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = lime
+                        )
+                        val diff = mins - limit
+                        Text(
+                            "План: ${limit / 60} ч ${limit % 60} мин · " +
+                                if (diff >= 0L) "Переработка: ${diff} мин"
+                                else "Осталось по плану: ${-diff} мин",
+                            color = if (diff > 0) Color(0xFFFFC47A) else textMuted,
+                            fontSize = 12.sp
+                        )
+                    }
+                    val breakTime = activeSession.totalPausedMs +
+                        (activeSession.pauseStartedMs?.let { nowMs - it } ?: 0L)
+                    Text("Неоплачиваемые перерывы: ${breakTime / 60_000} мин",
                         color = textMuted, fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(enabled = !isBusy,
@@ -617,6 +665,20 @@ private fun HomeScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
                         ) { Text("■ Завершить") }
                     }
+                    if (!WorkdayNotifications.allowed(notificationContext) &&
+                        Build.VERSION.SDK_INT >= 33) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                notificationPermissionLauncher.launch(
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                )
+                            }
+                        ) { Text("Разрешить управление через уведомления", color = lime) }
+                    } else Text(
+                        "Пауза, продолжение и завершение доступны из уведомления Android.",
+                        color = textMuted,fontSize = 12.sp
+                    )
                 }
             }
         }
@@ -673,6 +735,14 @@ private fun HomeScreen(
                 Text("${actualSummary.completedSessions} завершённых смен · " +
                     "${actualSummary.minutes / 60} ч ${actualSummary.minutes % 60} мин",
                     color = textMuted, fontSize = 12.sp)
+                val earnedDiff = actualSummary.earnedKopecks - summary.projectedKopecks
+                Text("План/факт: ${rubles(summary.projectedKopecks)} / " +
+                    "${rubles(actualSummary.earnedKopecks)}",
+                    color = textMuted, fontSize = 12.sp)
+                Text(if (earnedDiff >= 0) "Отклонение: +${rubles(earnedDiff)}"
+                    else "Отклонение: −${rubles(-earnedDiff)}",
+                    color = if (earnedDiff >= 0) lime else Color(0xFFFFC47A),
+                    fontSize = 13.sp)
             }
         }
         if (goal > 0L) {
