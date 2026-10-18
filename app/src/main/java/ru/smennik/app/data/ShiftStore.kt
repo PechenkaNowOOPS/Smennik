@@ -9,6 +9,8 @@ import ru.smennik.app.domain.BulkPlan
 import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.CustomCycle
 import ru.smennik.app.domain.WorkSession
+import ru.smennik.app.domain.WorkBreak
+import ru.smennik.app.domain.validateBreaks
 import ru.smennik.app.domain.WagePayment
 import ru.smennik.app.domain.PaymentType
 import ru.smennik.app.domain.DayType
@@ -20,7 +22,7 @@ import java.time.Instant
 import java.time.ZoneId
 
 /** Additive migrations: existing shifts and manual overrides are never erased. */
-class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", null, 6) {
+class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", null, 7) {
     private fun createWorkplaces(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE IF NOT EXISTS workplaces (
             id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -64,6 +66,28 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         )""")
     }
 
+    private fun createBreaksTable(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS session_breaks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            session_id INTEGER NOT NULL,
+            started_ms INTEGER NOT NULL,
+            ended_ms INTEGER NOT NULL,
+            paid INTEGER NOT NULL DEFAULT 0
+        )""")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_breaks_session ON session_breaks(session_id)")
+    }
+
+    private fun insertBreaks(db: SQLiteDatabase, sessionId: Long, breaks: List<WorkBreak>) {
+        breaks.forEach { pause ->
+            db.insertOrThrow("session_breaks", null, ContentValues().apply {
+                put("session_id",sessionId)
+                put("started_ms",pause.startMs)
+                put("ended_ms",pause.endMs)
+                put("paid",if (pause.paid) 1 else 0)
+            })
+        }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE shifts (
             date TEXT PRIMARY KEY NOT NULL,
@@ -77,10 +101,11 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         createWorkplaces(db)
         db.execSQL("ALTER TABLE work_sessions ADD COLUMN workplace_id INTEGER NOT NULL DEFAULT 1")
         db.execSQL("ALTER TABLE wage_payments ADD COLUMN workplace_id INTEGER NOT NULL DEFAULT 1")
+        createBreaksTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        require(oldVersion in 1..5 && newVersion == 6) {
+        require(oldVersion in 1..6 && newVersion == 7) {
             "Нет безопасной миграции SQLite с $oldVersion на $newVersion"
         }
         if (oldVersion < 2) {
@@ -96,9 +121,10 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
             db.execSQL("ALTER TABLE workplaces ADD COLUMN overtime_bonus_percent INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE workplaces ADD COLUMN overtime_after_minutes INTEGER NOT NULL DEFAULT 480")
         }
-        if (oldVersion >= 4) {
+        if (oldVersion in 4..5) {
             db.execSQL("ALTER TABLE workplaces ADD COLUMN monthly_goal_kopecks INTEGER NOT NULL DEFAULT 0")
         }
+        createBreaksTable(db)
     }
 
     fun workplaces(): List<Workplace> {
@@ -167,17 +193,86 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
             putNull("pause_started_ms")
             put("total_paused_ms", breakMinutes.toLong() * 60_000)
         }
-        check(writableDatabase.update("work_sessions", values,
-            "id = ? AND ended_ms IS NOT NULL", arrayOf(id.toString())) == 1) {
-            "Завершённая смена не найдена."
-        }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            check(db.update("work_sessions", values,
+                "id = ? AND ended_ms IS NOT NULL", arrayOf(id.toString())) == 1) {
+                "Завершённая смена не найдена."
+            }
+            // Old editor edits a total duration, so obsolete itemized breaks must be removed.
+            db.delete("session_breaks","session_id=?",arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    /**
+     * Add a historical work session; no live timer or planned calendar row is changed.
+     */
+    fun addManualSession(
+        workplaceId: Long, startMs: Long, endMs: Long, hourlyKopecks: Long,
+        breaks: List<WorkBreak>
+    ) {
+        require(startMs > 0 && endMs > startMs && endMs-startMs <= 48L*60*60*1000)
+        require(hourlyKopecks in 0..10_000_000L)
+        validateBreaks(startMs,endMs,breaks)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            ensureWorkplace(db,workplaceId)
+            val id = db.insertOrThrow("work_sessions",null,ContentValues().apply {
+                put("workplace_id",workplaceId)
+                put("shift_date",Instant.ofEpochMilli(startMs).atZone(ZoneId.systemDefault())
+                    .toLocalDate().toString())
+                put("started_ms",startMs)
+                put("ended_ms",endMs)
+                putNull("pause_started_ms")
+                put("total_paused_ms",breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs })
+                put("hourly_kopecks",hourlyKopecks)
+            })
+            insertBreaks(db,id,breaks)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun editFinishedSessionDetailed(
+        id: Long, startMs: Long, endMs: Long, hourlyKopecks: Long,
+        breaks: List<WorkBreak>
+    ) {
+        require(startMs > 0 && endMs > startMs && endMs-startMs <= 48L*60*60*1000)
+        require(hourlyKopecks in 0..10_000_000L)
+        validateBreaks(startMs,endMs,breaks)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val values = ContentValues().apply {
+                put("shift_date",Instant.ofEpochMilli(startMs).atZone(ZoneId.systemDefault())
+                    .toLocalDate().toString())
+                put("started_ms",startMs)
+                put("ended_ms",endMs)
+                putNull("pause_started_ms")
+                put("total_paused_ms",breaks.filterNot { it.paid }.sumOf { it.endMs-it.startMs })
+                put("hourly_kopecks",hourlyKopecks)
+            }
+            check(db.update("work_sessions",values,"id=? AND ended_ms IS NOT NULL",
+                arrayOf(id.toString()))==1) { "Завершённая смена не найдена." }
+            db.delete("session_breaks","session_id=?",arrayOf(id.toString()))
+            insertBreaks(db,id,breaks)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     fun deleteFinishedSession(id: Long) {
-        check(writableDatabase.delete("work_sessions",
-            "id = ? AND ended_ms IS NOT NULL", arrayOf(id.toString())) == 1) {
-            "Завершённая смена не найдена."
-        }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            check(db.delete("work_sessions",
+                "id = ? AND ended_ms IS NOT NULL", arrayOf(id.toString())) == 1) {
+                "Завершённая смена не найдена."
+            }
+            db.delete("session_breaks","session_id=?",arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     fun allSessions(): List<WorkSession> {
@@ -198,7 +293,20 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                 workplaceId = c.getLong(7)
             )
         }
-        return result
+        if (result.isEmpty()) return result
+        val grouped = mutableMapOf<Long,MutableList<WorkBreak>>()
+        readableDatabase.query("session_breaks",
+            arrayOf("session_id","started_ms","ended_ms","paid"),
+            null,null,null,null,"started_ms ASC").use { c ->
+            while (c.moveToNext()) {
+                grouped.getOrPut(c.getLong(0)) { mutableListOf() }.add(
+                    WorkBreak(c.getLong(1),c.getLong(2),c.getInt(3)!=0)
+                )
+            }
+        }
+        return result.map { session ->
+            session.copy(breaks=grouped[session.id].orEmpty())
+        }
     }
 
     fun allPayments(): List<WagePayment> {
@@ -250,6 +358,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                 require(nowMs >= item.pauseStartedMs)
                 cv.putNull("pause_started_ms")
                 cv.put("total_paused_ms", item.totalPausedMs + nowMs - item.pauseStartedMs)
+                insertBreaks(db,id,listOf(WorkBreak(item.pauseStartedMs,nowMs)))
             }
             check(db.update("work_sessions", cv, "id = ? AND ended_ms IS NULL",
                 arrayOf(id.toString())) == 1)
@@ -272,6 +381,8 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
             }
             check(db.update("work_sessions", cv, "id = ? AND ended_ms IS NULL",
                 arrayOf(id.toString())) == 1)
+            if (item.pauseStartedMs != null && nowMs > item.pauseStartedMs)
+                insertBreaks(db,id,listOf(WorkBreak(item.pauseStartedMs,nowMs)))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -299,6 +410,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         try {
             db.delete("shifts", null, null)
             db.delete("workplace_shifts", null, null)
+            db.delete("session_breaks", null, null)
             db.delete("work_sessions", null, null)
             db.delete("wage_payments", null, null)
             db.delete("workplaces", null, null)
@@ -316,7 +428,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                     null, values(it))
             }
             snapshot.sessions.forEach { item ->
-                db.insertOrThrow("work_sessions", null, ContentValues().apply {
+                val sessionId = db.insertOrThrow("work_sessions", null, ContentValues().apply {
                     put("workplace_id",item.workplaceId)
                     put("shift_date", item.date.toString())
                     put("started_ms", item.startedMs)
@@ -325,6 +437,7 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
                     put("total_paused_ms", item.totalPausedMs)
                     put("hourly_kopecks", item.hourlyKopecks)
                 })
+                insertBreaks(db,sessionId,item.breaks)
             }
             snapshot.payments.forEach { item ->
                 db.insertOrThrow("wage_payments", null, ContentValues().apply {
