@@ -2,13 +2,18 @@ package ru.smennik.app.ui
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -90,6 +95,33 @@ fun ShiftDateTimePickerField(
             Text(label, fontSize = 12.sp)
             Text(dateTimeText, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
             Text("Выбрать дату и время", fontSize = 11.sp)
+        }
+    }
+}
+
+
+// One tap selects both ends of a common schedule; overnight preset crosses midnight.
+@Composable
+fun ShiftTimePresets(
+    enabled: Boolean,
+    onChoose: (String, String) -> Unit
+) {
+    val presets = listOf(
+        Triple("День 08–20", "08:00", "20:00"),
+        Triple("Ночь 20–08", "20:00", "08:00"),
+        Triple("5/2 09–18", "09:00", "18:00"),
+        Triple("08–17", "08:00", "17:00")
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        presets.forEach { (label, begin, finish) ->
+            AssistChip(
+                enabled = enabled,
+                onClick = { onChoose(begin,finish) },
+                label = { Text(label, fontSize = 12.sp) }
+            )
         }
     }
 }

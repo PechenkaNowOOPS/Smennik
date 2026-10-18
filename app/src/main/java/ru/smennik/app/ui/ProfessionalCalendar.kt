@@ -401,6 +401,10 @@ private fun BulkEditDialog(
                             finish = it
                         }
                     }
+                    ShiftTimePresets(!saving) { begin, final ->
+                        start = begin
+                        finish = final
+                    }
                     OutlinedTextField(value = pay,
                         onValueChange = { if (it.all(Char::isDigit)) pay = it.take(6) },
                         label = { Text("Ставка, ₽/ч") }, singleLine = true)

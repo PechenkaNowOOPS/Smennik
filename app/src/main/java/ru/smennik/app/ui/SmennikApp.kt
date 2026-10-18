@@ -1499,6 +1499,10 @@ private fun EditShiftDialog(
                         end = it
                     }
                 }
+                ShiftTimePresets(!disabled) { begin, finish ->
+                    start = begin
+                    end = finish
+                }
                 OutlinedTextField(value = hourlyRubles, onValueChange = { hourlyRubles = it }, label = { Text("Ставка, ₽/час") }, singleLine = true)
                 Text("Равное время начала и конца — смена 24 часа. Более раннее окончание — следующий день.", fontSize = 12.sp, color = textMuted)
                 if (validation.isNotEmpty()) Text(validation, color = Color(0xFFFF8585), fontSize = 13.sp)
@@ -1610,6 +1614,10 @@ private fun PatternDialog(
                     ShiftTimePickerField("Окончание", end, !disabled, Modifier.weight(1f)) {
                         end = it
                     }
+                }
+                ShiftTimePresets(!disabled) { begin, finish ->
+                    start = begin
+                    end = finish
                 }
                 OutlinedTextField(
                     value = hourlyRubles,
