@@ -1,6 +1,13 @@
 package ru.smennik.app.ui
 
 import android.net.Uri
+import android.Manifest
+import android.os.Build
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import ru.smennik.app.reminders.ShiftReminders
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -65,7 +72,10 @@ fun SmennikApp(
     onTogglePause: suspend (Long) -> Result<Unit>,
     onFinishWork: suspend (Long) -> Result<Unit>,
     onPayment: suspend (LocalDate, Long, PaymentType, Long) -> Result<Unit>,
-    onRemovePayment: suspend (Long) -> Result<Unit>
+    onRemovePayment: suspend (Long) -> Result<Unit>,
+    onEditFinishedSession: suspend (Long, Long, Long, Int) -> Result<Unit>,
+    onDeleteFinishedSession: suspend (Long) -> Result<Unit>,
+    onExportCsv: suspend (Uri, Long, YearMonth) -> Result<Unit>
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<LocalDate?>(null) }
@@ -74,6 +84,7 @@ fun SmennikApp(
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
     var restoreError by remember { mutableStateOf<String?>(null) }
     var showAbout by remember { mutableStateOf(false) }
+    var showReminders by remember { mutableStateOf(false) }
     var showAddWorkplace by remember { mutableStateOf(false) }
     var selectedWorkplaceId by remember { mutableLongStateOf(1L) }
     val selectedWorkplace = state.workplaces.firstOrNull { it.id == selectedWorkplaceId }
@@ -179,6 +190,7 @@ fun SmennikApp(
                         onEdit = { editing = it },
                         onCalendar = { tab = 1 },
                         onAbout = { showAbout = true },
+                        onReminders = { showReminders = true },
                         onPattern = { patternAnchor = LocalDate.now(); showPatterns = true },
                         onExport = {
                             exportLauncher.launch("smennik-backup-${LocalDate.now()}.json")
@@ -209,7 +221,10 @@ fun SmennikApp(
                         shifts = shiftsOfJob,
                         sessions = sessionsOfJob,
                         payments = paymentsOfJob,
-                        workplace = selectedWorkplace
+                        workplace = selectedWorkplace,
+                        onEditCompleted = onEditFinishedSession,
+                        onDeleteCompleted = { id -> launchOperation { onDeleteFinishedSession(id) } },
+                        onExportCsv = { uri, month -> onExportCsv(uri, selectedId, month) }
                     )
                 }
             }
@@ -247,6 +262,9 @@ fun SmennikApp(
                     result
                 }
             )
+        }
+        if (showReminders) {
+            ReminderSettingsDialog(onDismiss = { showReminders = false })
         }
         if (showAbout) {
             AboutDialog(onDismiss = { showAbout = false })
@@ -339,6 +357,7 @@ private fun AddWorkplaceDialog(
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.5.0", "Уведомления о сменах, история и исправление фактического времени, CSV-отчёты, обзор недели."),
     VersionNote("0.4.0", "Настройка ночных доплат и переработок, премии, удержания, подробный расчёт зарплаты."),
     VersionNote("0.3.0", "Несколько мест работы, индивидуальные графики и свои повторяющиеся циклы."),
     VersionNote("0.2.0", "Фактическое время смен, паузы, финансы, выплаты, статистика и резервное копирование v3."),
@@ -435,6 +454,7 @@ private fun HomeScreen(
     onEdit: (LocalDate) -> Unit,
     onCalendar: () -> Unit,
     onAbout: () -> Unit,
+    onReminders: () -> Unit,
     onPattern: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit
@@ -552,6 +572,33 @@ private fun HomeScreen(
                 }
             }
         }
+        Spacer(Modifier.height(18.dp))
+        Text("Следующие 7 дней", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        val upcoming = shifts.filter {
+            it.type == DayType.WORK && !it.date.isBefore(today) && !it.date.isAfter(today.plusDays(6))
+        }.sortedBy { it.date }
+        if (upcoming.isEmpty()) {
+            Text("Рабочих смен на ближайшую неделю нет.", color = textMuted, fontSize = 13.sp)
+        }
+        upcoming.forEach { shift ->
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 7.dp).clickable { onEdit(shift.date) },
+                colors = CardDefaults.cardColors(containerColor = surface)
+            ) {
+                Row(Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column {
+                        Text(shift.date.format(DateTimeFormatter.ofPattern("EEE, d MMM", russian)),
+                            fontWeight = FontWeight.SemiBold)
+                        Text("${displayTime(shift.startMinutes)} — ${displayTime(shift.endMinutes)}",
+                            color = textMuted, fontSize = 13.sp)
+                    }
+                    Text(rubles(shift.projectedKopecks), color = lime, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
         Spacer(Modifier.height(24.dp))
         Text("Этот месяц", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
@@ -581,6 +628,11 @@ private fun HomeScreen(
             }
         }
         Spacer(Modifier.height(20.dp))
+        OutlinedButton(onClick = onReminders, modifier = Modifier.fillMaxWidth(),
+            border = BorderStroke(1.dp, Color(0xFF5A6A76))) {
+            Text("🔔 Напоминания о сменах", color = lime)
+        }
+        Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = onPattern, modifier = Modifier.fillMaxWidth(), border = BorderStroke(1.dp, lime)) {
             Text("⚡ Создать график 2/2, 3/3…", color = lime)
         }
@@ -872,9 +924,26 @@ private fun FinanceScreen(
 @Composable
 private fun StatisticsScreen(
     shifts: List<WorkShift>, sessions: List<WorkSession>,
-    payments: List<WagePayment>, workplace: Workplace
+    payments: List<WagePayment>, workplace: Workplace,
+    onEditCompleted: suspend (Long, Long, Long, Int) -> Result<Unit>,
+    onDeleteCompleted: (Long) -> Unit,
+    onExportCsv: suspend (Uri, YearMonth) -> Result<Unit>
 ) {
     var month by remember { mutableStateOf(YearMonth.now()) }
+    var editingSession by remember { mutableStateOf<WorkSession?>(null) }
+    var deleteCandidate by remember { mutableStateOf<WorkSession?>(null) }
+    val context = LocalContext.current
+    val exportScope = rememberCoroutineScope()
+    val csvLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) exportScope.launch {
+            onExportCsv(uri, month).fold(
+                onSuccess = { Toast.makeText(context,"CSV-отчёт сохранён",Toast.LENGTH_SHORT).show() },
+                onFailure = { Toast.makeText(context,"Ошибка CSV: ${it.message}",Toast.LENGTH_LONG).show() }
+            )
+        }
+    }
     val plan = monthlySummary(shifts, month)
     val actual = actualMonthSummary(sessions, payments, month, System.currentTimeMillis(), workplace)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
@@ -902,8 +971,203 @@ private fun StatisticsScreen(
                 "Ночные смены учитываются по дате их начала.",
             color = textMuted, fontSize = 12.sp
         )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { csvLauncher.launch("smennik-${workplace.id}-${month}.csv") },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = lime, contentColor = graphite)
+        ) { Text("↓ Экспортировать месяц в CSV") }
+        Text("История отработанных смен", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        val completed = sessions.filter {
+            !it.isRunning && YearMonth.from(it.date) == month
+        }.sortedByDescending { it.startedMs }
+        if (completed.isEmpty()) Text("Завершённых смен пока нет", color = textMuted)
+        completed.forEach { shift ->
+            val timeFormatter = DateTimeFormatter.ofPattern("dd.MM HH:mm")
+            Card(modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = surface)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        Instant.ofEpochMilli(shift.startedMs).atZone(ZoneId.systemDefault())
+                            .format(timeFormatter) + " — " +
+                        Instant.ofEpochMilli(shift.endedMs!!).atZone(ZoneId.systemDefault())
+                            .format(timeFormatter), fontWeight = FontWeight.SemiBold
+                    )
+                    Text("${shift.workedMinutes(System.currentTimeMillis())} мин · " +
+                        rubles(shift.earnedKopecks(System.currentTimeMillis())),
+                        color = textMuted, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { editingSession = shift }) {
+                            Text("Исправить", color = lime)
+                        }
+                        TextButton(onClick = { deleteCandidate = shift }) {
+                            Text("Удалить", color = Color(0xFFFF8585))
+                        }
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(18.dp))
     }
+    editingSession?.let { item ->
+        CompletedSessionDialog(
+            session = item,
+            onDismiss = { editingSession = null },
+            onSave = onEditCompleted
+        )
+    }
+    deleteCandidate?.let { item ->
+        AlertDialog(
+            onDismissRequest = { deleteCandidate = null },
+            title = { Text("Удалить учтённую смену?") },
+            text = { Text("Это удалит только фактический учёт времени, не план в календаре.") },
+            confirmButton = {
+                Button(onClick = {
+                    onDeleteCompleted(item.id)
+                    deleteCandidate = null
+                }) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCandidate = null }) { Text("Отмена") }
+            }
+        )
+    }
+}
+
+
+@Composable
+private fun ReminderSettingsDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var enabled by remember { mutableStateOf(ShiftReminders.enabled(context)) }
+    var lead by remember { mutableIntStateOf(ShiftReminders.leadMinutes(context)) }
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    val permissions = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) error = "Android не разрешил уведомления. Включите их в настройках приложения."
+        else scope.launch {
+            saving = true
+            runCatching { withContext(Dispatchers.IO) {
+                ShiftReminders.configure(context, enabled, lead)
+            } }.fold(onSuccess = { onDismiss() },
+                onFailure = { error = it.message ?: "Ошибка"; saving = false })
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text("Напоминания о сменах") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = enabled, enabled = !saving, onCheckedChange = { enabled = it })
+                    Text("Напоминать о работе")
+                }
+                Text("Предупреждать до начала смены:", color = textMuted)
+                Row(Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ShiftReminders.availableLeadMinutes.forEach { value ->
+                        FilterChip(selected = lead == value, enabled = !saving,
+                            onClick = { lead = value },
+                            label = { Text(if (value < 60) "${value} мин" else "${value / 60} ч") })
+                    }
+                }
+                Text(
+                    "Работает для всех мест работы и после перезагрузки телефона. " +
+                        "Android может немного задерживать уведомления для экономии батареи. " +
+                        "Точное время не гарантируется.",
+                    color = textMuted, fontSize = 12.sp
+                )
+                if (error.isNotEmpty()) Text(error, color = Color(0xFFFF8585), fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            Button(enabled = !saving, onClick = {
+                if (enabled && Build.VERSION.SDK_INT >= 33 &&
+                    !ShiftReminders.notificationsAllowed(context)) {
+                    permissions.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    saving = true
+                    scope.launch {
+                        runCatching { withContext(Dispatchers.IO) {
+                            ShiftReminders.configure(context, enabled, lead)
+                        } }.fold(onSuccess = { onDismiss() },
+                            onFailure = { error = it.message ?: "Ошибка"; saving = false })
+                    }
+                }
+            }) { Text(if (saving) "Сохранение…" else "Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text("Отмена") } }
+    )
+}
+
+@Composable
+private fun CompletedSessionDialog(
+    session: WorkSession,
+    onDismiss: () -> Unit,
+    onSave: suspend (Long, Long, Long, Int) -> Result<Unit>
+) {
+    val zone = ZoneId.systemDefault()
+    val format = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm") }
+    var start by remember(session.id) {
+        mutableStateOf(Instant.ofEpochMilli(session.startedMs).atZone(zone).format(format))
+    }
+    var end by remember(session.id) {
+        mutableStateOf(Instant.ofEpochMilli(session.endedMs!!).atZone(zone).format(format))
+    }
+    var pause by remember(session.id) { mutableStateOf((session.totalPausedMs / 60_000).toString()) }
+    var error by remember(session.id) { mutableStateOf("") }
+    var saving by remember(session.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text("Исправить отработанную смену") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = start, onValueChange = { start = it },
+                    label = { Text("Начало: ГГГГ-ММ-ДД ЧЧ:ММ") }, singleLine = true)
+                OutlinedTextField(value = end, onValueChange = { end = it },
+                    label = { Text("Конец: ГГГГ-ММ-ДД ЧЧ:ММ") }, singleLine = true)
+                OutlinedTextField(value = pause,
+                    onValueChange = { if (it.all(Char::isDigit)) pause = it.take(4) },
+                    label = { Text("Неоплачиваемые перерывы, мин") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                Text("Сохраняется фактическая история, график не меняется.",
+                    fontSize = 12.sp, color = textMuted)
+                if (error.isNotEmpty()) Text(error, color = Color(0xFFFF8585))
+            }
+        },
+        confirmButton = {
+            Button(enabled = !saving, onClick = {
+                val first = runCatching {
+                    LocalDateTime.parse(start, format).atZone(zone).toInstant().toEpochMilli()
+                }.getOrNull()
+                val last = runCatching {
+                    LocalDateTime.parse(end, format).atZone(zone).toInstant().toEpochMilli()
+                }.getOrNull()
+                val breaks = pause.toIntOrNull()
+                if (first == null || last == null || breaks == null ||
+                    first <= 0 || last <= first || last - first > 48L * 60 * 60 * 1000 ||
+                    breaks < 0 || breaks.toLong() * 60_000 >= last - first) {
+                    error = "Проверьте даты, длительность (до 48 ч) и перерывы."
+                } else {
+                    saving = true
+                    scope.launch {
+                        onSave(session.id,first,last,breaks).fold(
+                            onSuccess = { onDismiss() },
+                            onFailure = {
+                                error = it.message ?: "Ошибка сохранения"
+                                saving = false
+                            }
+                        )
+                    }
+                }
+            }) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(enabled = !saving, onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 @Composable
