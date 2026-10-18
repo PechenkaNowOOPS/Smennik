@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.WorkSession
+import ru.smennik.app.domain.WorkBreak
 import ru.smennik.app.domain.WagePayment
 import ru.smennik.app.domain.PaymentType
 import ru.smennik.app.domain.DayType
@@ -16,7 +17,7 @@ import java.time.LocalDate
 object ShiftBackup {
     const val MAX_BYTES = 5 * 1024 * 1024
     private const val FORMAT = "ru.smennik.backup"
-    private const val VERSION = 7
+    private const val VERSION = 8
     private const val MAX_SHIFTS = 100_000
 
     data class Snapshot(
@@ -66,7 +67,15 @@ object ShiftBackup {
                 .put("pauseStartedMs", s.pauseStartedMs ?: JSONObject.NULL)
                 .put("totalPausedMs", s.totalPausedMs)
                 .put("hourlyKopecks", s.hourlyKopecks)
-                .put("workplaceId", s.workplaceId))
+                .put("workplaceId", s.workplaceId)
+                .put("breaks", JSONArray().apply {
+                    s.breaks.sortedBy { it.startMs }.forEach { pause ->
+                        put(JSONObject()
+                            .put("startMs",pause.startMs)
+                            .put("endMs",pause.endMs)
+                            .put("paid",pause.paid))
+                    }
+                }))
         }
         val paymentEntries = JSONArray()
         payments.sortedBy { it.date }.forEach { p ->
@@ -169,8 +178,29 @@ object ShiftBackup {
                 pauseStartedMs = if (x.isNull("pauseStartedMs")) null else x.getLong("pauseStartedMs"),
                 totalPausedMs = x.getLong("totalPausedMs"),
                 hourlyKopecks = x.getLong("hourlyKopecks"),
-                workplaceId = if (fileVersion >= 4) x.getLong("workplaceId") else 1L
-            )
+                workplaceId = if (fileVersion >= 4) x.getLong("workplaceId") else 1L,
+                breaks = if (fileVersion >= 8) {
+                    val pauseArray = x.getJSONArray("breaks")
+                    require(pauseArray.length() <= 64) { "Слишком много перерывов." }
+                    List(pauseArray.length()) { p ->
+                        val pause = pauseArray.getJSONObject(p)
+                        WorkBreak(
+                            pause.getLong("startMs"),
+                            pause.getLong("endMs"),
+                            pause.getBoolean("paid")
+                        )
+                    }
+                } else emptyList()
+            ).also { session ->
+                // An old file can have a single ongoing break, but never invalid intervals.
+                if (session.endedMs != null) {
+                    val knownUnpaid = session.breaks.filterNot { it.paid }
+                        .sumOf { it.endMs-it.startMs }
+                    require(knownUnpaid <= session.totalPausedMs) {
+                        "Перерывы превышают неоплачиваемое время смены."
+                    }
+                }
+            }
         }
         require(sessions.count { it.isRunning } <= 1) { "В копии несколько активных смен." }
         val payments = List(paymentArray.length()) { index ->
