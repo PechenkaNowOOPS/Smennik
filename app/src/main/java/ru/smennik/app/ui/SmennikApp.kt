@@ -1491,17 +1491,14 @@ private fun EditShiftDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Время работы и почасовая ставка", color = textMuted)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ShiftTimePickerField("Начало", start, !disabled, Modifier.weight(1f)) {
-                        start = it
-                    }
-                    ShiftTimePickerField("Окончание", end, !disabled, Modifier.weight(1f)) {
-                        end = it
-                    }
-                }
-                ShiftTimePresets(!disabled) { begin, finish ->
-                    start = begin
-                    end = finish
+                ShiftTimeRangePickerField(
+                    start=start,
+                    end=end,
+                    enabled=!disabled,
+                    hourlyKopecks=hourlyRubles.toLongOrNull()?.times(100L)
+                ) { begin, finish ->
+                    start=begin
+                    end=finish
                 }
                 OutlinedTextField(value = hourlyRubles, onValueChange = { hourlyRubles = it }, label = { Text("Ставка, ₽/час") }, singleLine = true)
                 Text("Равное время начала и конца — смена 24 часа. Более раннее окончание — следующий день.", fontSize = 12.sp, color = textMuted)
@@ -1607,17 +1604,14 @@ private fun PatternDialog(
                 }
                 if (replaceExisting) Text("Внимание: все записи за эти 90 дней будут заменены. Сначала экспортируйте резервную копию.", color = Color(0xFFFF8585), fontSize = 12.sp)
                 Text("Для 5/2 рабочие дни — понедельник–пятница. Совпадающее начало и окончание = 24 ч.", color = textMuted, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ShiftTimePickerField("Начало смены", start, !disabled, Modifier.weight(1f)) {
-                        start = it
-                    }
-                    ShiftTimePickerField("Окончание", end, !disabled, Modifier.weight(1f)) {
-                        end = it
-                    }
-                }
-                ShiftTimePresets(!disabled) { begin, finish ->
-                    start = begin
-                    end = finish
+                ShiftTimeRangePickerField(
+                    start=start,
+                    end=end,
+                    enabled=!disabled,
+                    hourlyKopecks=hourlyRubles.toLongOrNull()?.times(100L)
+                ) { begin,finish ->
+                    start=begin
+                    end=finish
                 }
                 OutlinedTextField(
                     value = hourlyRubles,
