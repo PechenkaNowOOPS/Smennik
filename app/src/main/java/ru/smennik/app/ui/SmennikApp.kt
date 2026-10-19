@@ -387,6 +387,7 @@ private fun AddWorkplaceDialog(
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.9.1", "Обратный отсчёт до конца смены с поддержкой ночных и суточных графиков."),
     VersionNote("0.9.0", "Таймер с секундами, действия в уведомлениях, план/факт и прогноз зарплаты."),
     VersionNote("0.8.1", "Улучшена технология подготовки установочного APK с проверкой подписи."),
     VersionNote("0.8.0", "Ручной учёт отработанных смен и точные интервалы оплачиваемых/неоплачиваемых перерывов."),
@@ -633,10 +634,55 @@ private fun HomeScreen(
                         color = textMuted, fontSize = 13.sp)
                     Text("Заработано: ${rubles(activeSession.earnedKopecks(nowMs))}",
                         color = lime, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    val matchingPlan = shifts.firstOrNull {
-                        it.date == activeSession.date && it.type == DayType.WORK
-                    }
+                    val matchingPlan = plannedShiftForSession(shifts, activeSession)
                     if (matchingPlan != null) {
+                        val countdown = shiftEndCountdown(
+                            matchingPlan, nowMs, ZoneId.systemDefault()
+                        )!!
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = graphite,
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Text(
+                                    if (countdown.isFinishedBySchedule)
+                                        "ВРЕМЯ СМЕНЫ ПО ГРАФИКУ ВЫШЛО"
+                                    else "ДО КОНЦА СМЕНЫ",
+                                    color = if (countdown.isFinishedBySchedule)
+                                        Color(0xFFFFC47A) else textMuted,
+                                    fontSize = 12.sp, fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    formatClockDuration(
+                                        if (countdown.isFinishedBySchedule)
+                                            countdown.overdueSeconds else countdown.remainingSeconds
+                                    ),
+                                    color = if (countdown.isFinishedBySchedule)
+                                        Color(0xFFFFC47A) else lime,
+                                    fontSize = 34.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    if (countdown.isFinishedBySchedule)
+                                        "Сверх времени по графику"
+                                    else "До ${displayTime(matchingPlan.endMinutes)}" +
+                                        if (matchingPlan.endsAt.toLocalDate() != matchingPlan.date)
+                                            " следующего дня" else "",
+                                    color = textMuted, fontSize = 12.sp
+                                )
+                                if (activeSession.isPaused) {
+                                    Text(
+                                        "Перерыв не сдвигает окончание смены по графику.",
+                                        color = textMuted, fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+
                         val limit = matchingPlan.durationMinutes.toLong()
                         LinearProgressIndicator(
                             progress = { (mins.toFloat() / limit.coerceAtLeast(1)).coerceIn(0f,1f) },
