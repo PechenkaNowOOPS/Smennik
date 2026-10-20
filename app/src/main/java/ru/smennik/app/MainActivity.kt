@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
             SmennikApp(
                 state = state,
                 onRetryLoad = model::reload,
+                onAutomaticStart = model::checkAutomaticStart,
                 onSave = model::save,
                 onRemove = model::remove,
                 onPattern = model::generate,
