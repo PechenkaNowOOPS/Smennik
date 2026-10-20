@@ -75,7 +75,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val snapshot = writeMutex.withLock {
                     withContext(Dispatchers.IO) {
-                        AutomaticShiftStartScheduler.catchUp(getApplication<Application>().applicationContext)
+                        runCatching { AutomaticShiftStartScheduler.catchUp(getApplication<Application>().applicationContext) }
                         snapshot()
                     }
                 }
@@ -105,7 +105,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             val shifts = writeMutex.withLock {
                 withContext(Dispatchers.IO) {
                     action()
-                    AutomaticShiftStartScheduler.catchUp(getApplication<Application>().applicationContext)
+                    runCatching { AutomaticShiftStartScheduler.catchUp(getApplication<Application>().applicationContext) }
                     snapshot()
                 }
             }
