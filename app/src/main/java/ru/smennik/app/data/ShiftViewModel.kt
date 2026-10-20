@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import ru.smennik.app.domain.ShiftMove
 import ru.smennik.app.domain.BulkPlan
 import ru.smennik.app.domain.CustomCycle
+import ru.smennik.app.domain.Person
 import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.WorkSession
 import ru.smennik.app.domain.WorkBreak
@@ -36,6 +37,7 @@ data class ShiftUiState(
     val sessions: List<WorkSession> = emptyList(),
     val payments: List<WagePayment> = emptyList(),
     val workplaces: List<Workplace> = emptyList(),
+    val persons: List<Person> = emptyList(),
     val isLoading: Boolean = true,
     val isBusy: Boolean = false,
     val loadingError: String? = null
@@ -50,10 +52,11 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
 
     private data class StoreSnapshot(
         val shifts: List<WorkShift>, val sessions: List<WorkSession>,
-        val payments: List<WagePayment>, val workplaces: List<Workplace>
+        val payments: List<WagePayment>, val workplaces: List<Workplace>,
+        val persons: List<Person>
     )
     private fun snapshot() = StoreSnapshot(
-        store.all(),store.allSessions(),store.allPayments(),store.workplaces()
+        store.all(),store.allSessions(),store.allPayments(),store.workplaces(),store.persons()
     )
 
     init { load() }
@@ -72,7 +75,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(shifts = snapshot.shifts, sessions = snapshot.sessions,
                         payments = snapshot.payments, workplaces = snapshot.workplaces,
-                        isLoading = false, loadingError = null)
+                        persons = snapshot.persons, isLoading = false, loadingError = null)
                 }
                 withContext(Dispatchers.IO) {
                     runCatching {
@@ -100,7 +103,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             }
             _uiState.update { it.copy(shifts = shifts.shifts, sessions = shifts.sessions,
                 payments = shifts.payments, workplaces = shifts.workplaces,
-                loadingError = null) }
+                persons = shifts.persons, loadingError = null) }
             // Do not undo an already persisted user operation if Android disallows alarms.
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -155,8 +158,13 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun deleteFinishedSession(id: Long): Result<Unit> =
         mutate { store.deleteFinishedSession(id) }
 
-    suspend fun addWorkplace(name: String, hourlyKopecks: Long): Result<Unit> =
-        mutate { store.addWorkplace(name, hourlyKopecks) }
+    suspend fun addPerson(name: String): Result<Unit> = mutate { store.addPerson(name) }
+
+    suspend fun renamePerson(personId: Long, name: String): Result<Unit> =
+        mutate { store.renamePerson(personId,name) }
+
+    suspend fun addWorkplace(name: String, hourlyKopecks: Long, personId: Long): Result<Unit> =
+        mutate { store.addWorkplace(name, hourlyKopecks,personId) }
 
     suspend fun updatePayRules(id: Long, nightPercent: Int, overtimePercent: Int,
                                overtimeAfterMinutes: Int): Result<Unit> =
@@ -229,7 +237,8 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             writeMutex.withLock {
                 withContext(Dispatchers.IO) {
-                    val bytes = ShiftBackup.encode(store.all(), store.allSessions(), store.allPayments(),store.workplaces())
+                    val bytes = ShiftBackup.encode(store.all(), store.allSessions(), store.allPayments(),
+                        store.workplaces(),store.persons())
                     val output = resolver.openOutputStream(uri, "w")
                         ?: throw IOException("Не удалось открыть выбранный файл для записи.")
                     output.use { it.write(bytes) }
@@ -273,7 +282,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             }
             _uiState.update { it.copy(shifts = updated.shifts, sessions = updated.sessions,
                 payments = updated.payments, workplaces = updated.workplaces,
-                loadingError = null) }
+                persons = updated.persons, loadingError = null) }
             withContext(Dispatchers.IO) {
                 runCatching {
                     ShiftReminders.sync(getApplication<Application>().applicationContext, updated.shifts)
