@@ -34,64 +34,66 @@ object WorkdayNotifications {
                 PackageManager.PERMISSION_GRANTED
 
     fun sync(context: Context) {
-        val app = context.applicationContext
-        val manager = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (!allowed(app)) {
-            manager.cancel(NOTIFICATION_ID)
-            return
-        }
-        ShiftStore(app).use { store ->
-            val active = store.allSessions().firstOrNull { it.isRunning }
-            if (active == null) {
-                manager.cancel(NOTIFICATION_ID)
-                return
+        val app=context.applicationContext
+        val manager=app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val prefs=app.getSharedPreferences("workday_notification_ids",Context.MODE_PRIVATE)
+        val past=prefs.getStringSet("ids",emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }
+        val visible=if (allowed(app)) {
+            ShiftStore(app).use { store ->
+                val people=store.persons().associateBy { it.id }
+                val jobs=store.workplaces().associateBy { it.id }
+                store.allSessions().filter { it.isRunning }.map { session ->
+                    Triple(session,jobs[session.workplaceId],
+                        people[jobs[session.workplaceId]?.personId]?.name ?: "Я")
+                }
             }
-            val workplace = store.workplaces().firstOrNull { it.id == active.workplaceId }
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL, "Активная рабочая смена",
-                    NotificationManager.IMPORTANCE_LOW
-                ).apply { description = "Управление таймером и перерывами" }
-            )
-            fun action(action: String, code: Int): PendingIntent =
+        } else emptyList()
+        manager.cancel(NOTIFICATION_ID) // Remove legacy single-session notification.
+        val ids=visible.map { it.first.id.toInt() }.toSet()
+        for (old in past) if (old !in ids) manager.cancel("workday",old)
+        prefs.edit().putStringSet("ids",ids.map { it.toString() }.toSet()).apply()
+        if(visible.isEmpty()) return
+        manager.createNotificationChannel(NotificationChannel(
+            CHANNEL,"Активные рабочие смены",NotificationManager.IMPORTANCE_LOW
+        ).apply {description="Управление временем работы каждого человека"})
+        val open=PendingIntent.getActivity(
+            app,0,
+            Intent(app,MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        for ((active,workplace,person) in visible) {
+            fun action(action: String, suffix: Int): PendingIntent =
                 PendingIntent.getBroadcast(
-                    app, code,
-                    Intent(app, WorkdayActionReceiver::class.java)
-                        .setAction(action).putExtra("session_id",active.id),
+                    app,active.id.toInt()*4+suffix,
+                    Intent(app,WorkdayActionReceiver::class.java)
+                        .setAction(action)
+                        .setData(android.net.Uri.parse("smennik://workday/${active.id}/$suffix"))
+                        .putExtra("session_id",active.id),
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
-            val open = PendingIntent.getActivity(
-                app, 0,
-                Intent(app,MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            val start = Instant.ofEpochMilli(active.startedMs).atZone(ZoneId.systemDefault())
+            val start=Instant.ofEpochMilli(active.startedMs).atZone(ZoneId.systemDefault())
                 .format(DateTimeFormatter.ofPattern("dd.MM HH:mm"))
-            val minutes = active.workedMinutes(System.currentTimeMillis())
-            val notification = Notification.Builder(app, CHANNEL)
+            val minutes=active.workedMinutes(System.currentTimeMillis())
+            val title="${person} · ${workplace?.name ?: "Работа"}"
+            val notification=Notification.Builder(app,CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle(
-                    if (active.isPaused) "Перерыв · ${workplace?.name ?: "Работа"}"
-                    else "Рабочая смена · ${workplace?.name ?: "Работа"}"
-                )
+                .setContentTitle(if(active.isPaused) "Перерыв · $title" else "Смена · $title")
                 .setContentText(
-                    "Начало: $start · ${minutes / 60} ч ${minutes % 60} мин · " +
-                        "${active.earnedKopecks(System.currentTimeMillis()) / 100} ₽"
+                    "Начало: $start · ${minutes/60} ч ${minutes%60} мин · " +
+                        "${active.earnedKopecks(System.currentTimeMillis())/100} ₽"
                 )
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setShowWhen(false)
                 .setContentIntent(open)
-                .addAction(
-                    android.R.drawable.ic_media_pause,
-                    if (active.isPaused) "Продолжить" else "Перерыв",
-                    action(PAUSE_ACTION, 701)
-                )
+                .addAction(android.R.drawable.ic_media_pause,
+                    if(active.isPaused) "Продолжить" else "Перерыв",
+                    action(PAUSE_ACTION,1))
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel,
-                    "Завершить", action(FINISH_ACTION, 702))
+                    "Завершить",action(FINISH_ACTION,2))
                 .build()
-            manager.notify(NOTIFICATION_ID, notification)
+            manager.notify("workday",active.id.toInt(),notification)
         }
     }
 }
