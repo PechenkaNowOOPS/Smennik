@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/android-test-apk.yml'
+      - 'app/src/**'
+      - 'app/build.gradle.kts'
+      - 'version.properties'
 
 permissions:
   contents: read
