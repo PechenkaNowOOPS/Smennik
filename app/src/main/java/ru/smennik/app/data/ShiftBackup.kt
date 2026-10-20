@@ -2,6 +2,7 @@ package ru.smennik.app.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import ru.smennik.app.domain.Person
 import ru.smennik.app.domain.Workplace
 import ru.smennik.app.domain.WorkSession
 import ru.smennik.app.domain.WorkBreak
@@ -17,14 +18,15 @@ import java.time.LocalDate
 object ShiftBackup {
     const val MAX_BYTES = 5 * 1024 * 1024
     private const val FORMAT = "ru.smennik.backup"
-    private const val VERSION = 8
+    private const val VERSION = 9
     private const val MAX_SHIFTS = 100_000
 
     data class Snapshot(
         val shifts: List<WorkShift>,
         val sessions: List<WorkSession>,
         val payments: List<WagePayment>,
-        val workplaces: List<Workplace> = listOf(Workplace(1, "Основная работа"))
+        val workplaces: List<Workplace> = listOf(Workplace(1, "Основная работа")),
+        val persons: List<Person> = listOf(Person(1,"Я"))
     )
 
     fun encode(shifts: List<WorkShift>): ByteArray =
@@ -35,8 +37,14 @@ object ShiftBackup {
 
     fun encode(
         shifts: List<WorkShift>, sessions: List<WorkSession>,
-        payments: List<WagePayment>, workplaces: List<Workplace>
+        payments: List<WagePayment>, workplaces: List<Workplace>,
+        persons: List<Person> = listOf(Person(1,"Я"))
     ): ByteArray {
+        require(persons.isNotEmpty() && persons.size <= 50 && persons.any { it.id == 1L })
+        require(persons.distinctBy { it.id }.size == persons.size)
+        require(workplaces.all { job -> persons.any { it.id == job.personId } }) {
+            "Место работы привязано к неизвестному человеку."
+        }
         require(workplaces.isNotEmpty() && workplaces.size <= 300)
         require(workplaces.any { it.id == 1L })
         val ids = workplaces.map { it.id }.toSet()
@@ -92,10 +100,16 @@ object ShiftBackup {
                 .put("nightBonusPercent",w.nightBonusPercent)
                 .put("overtimeBonusPercent",w.overtimeBonusPercent)
                 .put("overtimeAfterMinutes",w.overtimeAfterMinutes)
-                .put("monthlyGoalKopecks",w.monthlyGoalKopecks))
+                .put("monthlyGoalKopecks",w.monthlyGoalKopecks)
+                .put("personId",w.personId))
+        }
+        val peopleEntries = JSONArray()
+        persons.sortedBy { it.id }.forEach { person ->
+            peopleEntries.put(JSONObject().put("id",person.id).put("name",person.name))
         }
         val payload = JSONObject()
             .put("version", VERSION)
+            .put("persons",peopleEntries)
             .put("workplaces",workplaceEntries)
             .put("shifts", entries)
             .put("sessions", sessionEntries)
@@ -129,6 +143,17 @@ object ShiftBackup {
         require(fileVersion in 1..VERSION) { "Версия резервной копии не поддерживается." }
         val entries = content.getJSONArray("shifts")
         require(entries.length() <= MAX_SHIFTS) { "В резервной копии слишком много записей." }
+        val persons = if (fileVersion >= 9) {
+            val entries=content.getJSONArray("persons")
+            require(entries.length() in 1..50)
+            val restored=List(entries.length()) { i ->
+                val item=entries.getJSONObject(i)
+                Person(item.getLong("id"),item.getString("name"))
+            }
+            require(restored.any { it.id==1L } &&
+                restored.distinctBy { it.id }.size==restored.size)
+            restored
+        } else listOf(Person(1,"Я"))
         val workplaces = if (fileVersion >= 4) {
             val items = content.getJSONArray("workplaces")
             require(items.length() in 1..300) { "Неверное количество мест работы." }
@@ -138,9 +163,12 @@ object ShiftBackup {
                     nightBonusPercent = if (fileVersion >= 5) w.getInt("nightBonusPercent") else 0,
                     overtimeBonusPercent = if (fileVersion >= 5) w.getInt("overtimeBonusPercent") else 0,
                     overtimeAfterMinutes = if (fileVersion >= 5) w.getInt("overtimeAfterMinutes") else 480,
-                    monthlyGoalKopecks = if (fileVersion >= 7) w.getLong("monthlyGoalKopecks") else 0L)
+                    monthlyGoalKopecks = if (fileVersion >= 7) w.getLong("monthlyGoalKopecks") else 0L,
+                    personId = if (fileVersion >= 9) w.getLong("personId") else 1L)
             }
             require(result.any { it.id == 1L } && result.map { it.id }.toSet().size == result.size)
+            require(result.all { job -> persons.any { it.id == job.personId } })
+            require(persons.all { p -> result.any { it.personId == p.id } })
             result
         } else listOf(Workplace(1,"Основная работа"))
         val dates = HashSet<Pair<Long,LocalDate>>(entries.length())
@@ -161,7 +189,8 @@ object ShiftBackup {
                 workplaceId = workplaceId
             )
         }
-        if (fileVersion < 3) return Snapshot(restoredShifts, emptyList(), emptyList(), workplaces)
+        if (fileVersion < 3)
+            return Snapshot(restoredShifts, emptyList(), emptyList(), workplaces,persons)
 
         val sessionArray = content.getJSONArray("sessions")
         val paymentArray = content.getJSONArray("payments")
@@ -202,7 +231,12 @@ object ShiftBackup {
                 }
             }
         }
-        require(sessions.count { it.isRunning } <= 1) { "В копии несколько активных смен." }
+        val personOfWorkplace=workplaces.associate { it.id to it.personId }
+        val activeByPerson=sessions.filter { it.isRunning }
+            .groupBy { personOfWorkplace[it.workplaceId] }
+        require(activeByPerson.values.all { it.size<=1 }) {
+            "В копии несколько активных смен одного человека."
+        }
         val payments = List(paymentArray.length()) { index ->
             val x = paymentArray.getJSONObject(index)
             WagePayment(
@@ -215,7 +249,7 @@ object ShiftBackup {
         }
         require(sessions.all { it.workplaceId in workplaces.map(Workplace::id) } &&
             payments.all { it.workplaceId in workplaces.map(Workplace::id) })
-        return Snapshot(restoredShifts, sessions, payments, workplaces)
+        return Snapshot(restoredShifts, sessions, payments, workplaces,persons)
     }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
