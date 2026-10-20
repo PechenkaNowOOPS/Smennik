@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.smennik.app.reminders.ShiftReminders
 import ru.smennik.app.reminders.WorkdayNotifications
+import ru.smennik.app.widgets.ShiftWidgetUpdater
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -96,7 +97,8 @@ fun SmennikApp(
     var showAddWorkplace by remember { mutableStateOf(false) }
     var showAddPerson by remember { mutableStateOf(false) }
     var showRenamePerson by remember { mutableStateOf(false) }
-    val personPrefs = LocalContext.current.getSharedPreferences("smennik_selected_person",0)
+    val localContext = LocalContext.current
+    val personPrefs = localContext.getSharedPreferences("smennik_selected_person",0)
     var selectedPersonId by remember {
         mutableLongStateOf(personPrefs.getLong("person_id",1L))
     }
@@ -190,6 +192,12 @@ fun SmennikApp(
                                 onClick={
                                     selectedPersonId=person.id
                                     personPrefs.edit().putLong("person_id",person.id).apply()
+                                    // Desktop widgets always reflect the selected person's data.
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            ShiftWidgetUpdater.updateAll(localContext)
+                                        }
+                                    }
                                     selectedWorkplaceId=state.workplaces.firstOrNull {
                                         it.personId==person.id
                                     }?.id ?: 1L

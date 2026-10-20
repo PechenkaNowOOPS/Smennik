@@ -38,9 +38,12 @@ object ShiftWidgetUpdater {
         val earningsIds = manager.getAppWidgetIds(ComponentName(app,MonthlyIncomeWidget::class.java))
         if (shiftsIds.isEmpty() && earningsIds.isEmpty()) return
         ShiftStore(app).use { store ->
-            val workplaces = store.workplaces()
+            val selectedPerson = app.getSharedPreferences("smennik_selected_person",0)
+                .getLong("person_id",1L)
+            val workplaces = store.workplaces().filter { it.personId == selectedPerson }
+            val jobIds = workplaces.map { it.id }.toSet()
             if (shiftsIds.isNotEmpty()) {
-                val shift = nearestPlannedShift(store.all(),LocalDateTime.now())
+                val shift = nearestPlannedShift(store.all().filter { it.workplaceId in jobIds },LocalDateTime.now())
                 val name = workplaces.firstOrNull { it.id == shift?.workplaceId }?.name
                 val running = shift != null && !LocalDateTime.now().isBefore(shift.startsAt)
                 shiftsIds.forEach { id ->
@@ -61,8 +64,10 @@ object ShiftWidgetUpdater {
             }
             if (earningsIds.isNotEmpty()) {
                 val now=System.currentTimeMillis()
-                val progress=monthlyGoalProgress(workplaces,store.allSessions(),
-                    store.allPayments(),YearMonth.now(),now)
+                val progress=monthlyGoalProgress(workplaces,
+                    store.allSessions().filter { it.workplaceId in jobIds },
+                    store.allPayments().filter { it.workplaceId in jobIds },
+                    YearMonth.now(),now)
                 earningsIds.forEach { id ->
                     val view=RemoteViews(app.packageName,R.layout.widget_monthly_income)
                     view.setTextViewText(R.id.widget_income_month,

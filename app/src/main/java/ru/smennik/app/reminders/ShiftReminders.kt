@@ -126,9 +126,11 @@ object ShiftReminders {
     fun notifyIfCurrent(context: Context, workplaceId: Long, date: LocalDate, expectedStart: Long) {
         if (!enabled(context) || !notificationsAllowed(context)) return
         val store = ShiftStore(context.applicationContext)
-        val (shift, workplace) = store.use { s ->
-            s.all().firstOrNull { it.workplaceId == workplaceId && it.date == date } to
-                s.workplaces().firstOrNull { it.id == workplaceId }
+        val (shift, workplace, personName) = store.use { s ->
+            val shift=s.all().firstOrNull { it.workplaceId == workplaceId && it.date == date }
+            val workplace=s.workplaces().firstOrNull { it.id == workplaceId }
+            val person=s.persons().firstOrNull { it.id == workplace?.personId }?.name
+            Triple(shift,workplace,person ?: "Я")
         }
         if (shift == null || shift.type != DayType.WORK) return
         val actualStart = shift.startsAt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -146,7 +148,7 @@ object ShiftReminders {
         val whenText = shift.startsAt.format(DateTimeFormatter.ofPattern("dd.MM, HH:mm"))
         val notification = Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
-            .setContentTitle("Скоро смена · ${workplace?.name ?: "Работа"}")
+            .setContentTitle("Смена: $personName · ${workplace?.name ?: "Работа"}")
             .setContentText("Начало: ${whenText}")
             .setContentIntent(open)
             .setAutoCancel(true)
