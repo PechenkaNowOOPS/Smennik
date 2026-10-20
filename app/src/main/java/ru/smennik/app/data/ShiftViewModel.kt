@@ -24,6 +24,7 @@ import ru.smennik.app.domain.WagePayment
 import ru.smennik.app.domain.PaymentType
 import ru.smennik.app.domain.WorkPattern
 import ru.smennik.app.domain.WorkShift
+import ru.smennik.app.reminders.AutomaticShiftStartScheduler
 import ru.smennik.app.reminders.ShiftReminders
 import ru.smennik.app.reminders.WorkdayNotifications
 import ru.smennik.app.widgets.ShiftWidgetUpdater
@@ -61,6 +62,9 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
 
     init { load() }
 
+    /** Called when the foreground clock reaches the next scheduled start. */
+    fun checkAutomaticStart() = load()
+
     fun reload() {
         _uiState.update { it.copy(isLoading = true, loadingError = null) }
         load()
@@ -70,7 +74,10 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val snapshot = writeMutex.withLock {
-                    withContext(Dispatchers.IO) { snapshot() }
+                    withContext(Dispatchers.IO) {
+                        AutomaticShiftStartScheduler.catchUp(getApplication<Application>().applicationContext)
+                        snapshot()
+                    }
                 }
                 _uiState.update {
                     it.copy(shifts = snapshot.shifts, sessions = snapshot.sessions,
@@ -98,6 +105,7 @@ class ShiftViewModel(application: Application) : AndroidViewModel(application) {
             val shifts = writeMutex.withLock {
                 withContext(Dispatchers.IO) {
                     action()
+                    AutomaticShiftStartScheduler.catchUp(getApplication<Application>().applicationContext)
                     snapshot()
                 }
             }
