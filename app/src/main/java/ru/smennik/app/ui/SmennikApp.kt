@@ -67,7 +67,9 @@ fun SmennikApp(
     onCustomPattern: suspend (LocalDate, String, Int, Int, Long, Boolean, Long) -> Result<Unit>,
     onBulkPlan: suspend (BulkPlan) -> Result<Unit>,
     onBulkMove: suspend (ShiftMove) -> Result<Unit>,
-    onAddWorkplace: suspend (String, Long) -> Result<Unit>,
+    onAddWorkplace: suspend (String, Long, Long) -> Result<Unit>,
+    onAddPerson: suspend (String) -> Result<Unit>,
+    onRenamePerson: suspend (Long, String) -> Result<Unit>,
     onUpdatePayRules: suspend (Long, Int, Int, Int) -> Result<Unit>,
     onUpdateMonthlyGoal: suspend (Long, Long) -> Result<Unit>,
     onExportBackup: suspend (Uri) -> Result<Unit>,
@@ -92,16 +94,30 @@ fun SmennikApp(
     var showAbout by remember { mutableStateOf(false) }
     var showReminders by remember { mutableStateOf(false) }
     var showAddWorkplace by remember { mutableStateOf(false) }
+    var showAddPerson by remember { mutableStateOf(false) }
+    var showRenamePerson by remember { mutableStateOf(false) }
+    val personPrefs = LocalContext.current.getSharedPreferences("smennik_selected_person",0)
+    var selectedPersonId by remember {
+        mutableLongStateOf(personPrefs.getLong("person_id",1L))
+    }
     var selectedWorkplaceId by remember { mutableLongStateOf(1L) }
     var editingWorkplaceId by remember { mutableLongStateOf(1L) }
-    val selectedWorkplace = state.workplaces.firstOrNull { it.id == selectedWorkplaceId }
-        ?: state.workplaces.firstOrNull()
+    val selectedPerson = state.persons.firstOrNull { it.id == selectedPersonId }
+        ?: state.persons.firstOrNull()
+        ?: Person(1L,"Я")
+    val personWorkplaces = state.workplaces.filter { it.personId == selectedPerson.id }
+    val personJobIds = personWorkplaces.map { it.id }.toSet()
+    val selectedWorkplace = personWorkplaces.firstOrNull { it.id == selectedWorkplaceId }
+        ?: personWorkplaces.firstOrNull()
         ?: Workplace(1L, "Основная работа")
     val selectedId = if (selectedWorkplaceId == 0L && (tab == 1 || tab == 3))
         0L else selectedWorkplace.id
-    val shiftsOfJob = state.shifts.filter { selectedId == 0L || it.workplaceId == selectedId }
-    val sessionsOfJob = state.sessions.filter { selectedId == 0L || it.workplaceId == selectedId }
-    val paymentsOfJob = state.payments.filter { selectedId == 0L || it.workplaceId == selectedId }
+    val personShifts = state.shifts.filter { it.workplaceId in personJobIds }
+    val personSessions = state.sessions.filter { it.workplaceId in personJobIds }
+    val personPayments = state.payments.filter { it.workplaceId in personJobIds }
+    val shiftsOfJob = personShifts.filter { selectedId == 0L || it.workplaceId == selectedId }
+    val sessionsOfJob = personSessions.filter { selectedId == 0L || it.workplaceId == selectedId }
+    val paymentsOfJob = personPayments.filter { selectedId == 0L || it.workplaceId == selectedId }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     fun launchOperation(action: suspend () -> Result<Unit>) {
@@ -162,6 +178,36 @@ fun SmennikApp(
                 if (!state.isLoading && state.loadingError == null) {
                     Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                            .padding(horizontal=14.dp,vertical=5.dp),
+                        horizontalArrangement=Arrangement.spacedBy(8.dp),
+                        verticalAlignment=Alignment.CenterVertically
+                    ) {
+                        Text("ЛЮДИ",fontSize=11.sp,color=textMuted,fontWeight=FontWeight.Bold)
+                        state.persons.forEach { person ->
+                            FilterChip(
+                                selected=selectedPerson.id==person.id,
+                                enabled=!state.isBusy,
+                                onClick={
+                                    selectedPersonId=person.id
+                                    personPrefs.edit().putLong("person_id",person.id).apply()
+                                    selectedWorkplaceId=state.workplaces.firstOrNull {
+                                        it.personId==person.id
+                                    }?.id ?: 1L
+                                    editing=null
+                                    showPatterns=false
+                                },
+                                label={Text(person.name)}
+                            )
+                        }
+                        TextButton(onClick={showAddPerson=true},enabled=!state.isBusy) {
+                            Text("+ Человек",color=lime)
+                        }
+                        TextButton(onClick={showRenamePerson=true},enabled=!state.isBusy) {
+                            Text("✎",color=lime)
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                             .padding(horizontal = 14.dp, vertical = 5.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -171,7 +217,7 @@ fun SmennikApp(
                                 onClick = { selectedWorkplaceId = 0L },
                                 label = { Text("Все работы") })
                         }
-                        state.workplaces.forEach { job ->
+                        personWorkplaces.forEach { job ->
                             FilterChip(
                                 selected = selectedId == job.id,
                                 onClick = { selectedWorkplaceId = job.id },
@@ -195,7 +241,7 @@ fun SmennikApp(
                         isBusy = state.isBusy,
                         defaultRate = selectedWorkplace.hourlyKopecks,
                         workplace = selectedWorkplace,
-                        activeElsewhere = state.sessions.any { it.isRunning && it.workplaceId != selectedId },
+                        activeElsewhere = personSessions.any { it.isRunning && it.workplaceId != selectedId },
                         onStartWork = { date, rate ->
                             launchOperation { onStartWork(date, rate, selectedId) }
                         },
@@ -213,9 +259,9 @@ fun SmennikApp(
                         onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) }
                     )
                     tab == 1 -> ProfessionalCalendarScreen(
-                        shifts = state.shifts,
-                        workplaces = state.workplaces,
-                        sessions = state.sessions,
+                        shifts = personShifts,
+                        workplaces = personWorkplaces,
+                        sessions = personSessions,
                         filterWorkplaceId = selectedId.takeIf { it != 0L },
                         onEdit = { day, job -> editingWorkplaceId = job; editing = day },
                         onPattern = { day -> patternAnchor = day; showPatterns = true },
@@ -238,10 +284,10 @@ fun SmennikApp(
                         onUpdateGoal = { amount -> onUpdateMonthlyGoal(selectedId,amount) }
                     )
                     else -> if (selectedId == 0L) AllWorkStatisticsScreen(
-                        shifts = state.shifts,
-                        sessions = state.sessions,
-                        payments = state.payments,
-                        workplaces = state.workplaces
+                        shifts = personShifts,
+                        sessions = personSessions,
+                        payments = personPayments,
+                        workplaces = personWorkplaces
                     ) else StatisticsScreen(
                         shifts = shiftsOfJob,
                         sessions = sessionsOfJob,
@@ -273,10 +319,10 @@ fun SmennikApp(
             onDismiss = { showPatterns = false },
             defaultRate = selectedWorkplace.hourlyKopecks,
             onSelect = { pattern, start, end, rate, replace ->
-                onPattern(patternAnchor, pattern, start, end, rate, replace, selectedId)
+                onPattern(patternAnchor, pattern, start, end, rate, replace, selectedWorkplace.id)
             },
             onCustomSelect = { mask, start, end, rate, replace ->
-                onCustomPattern(patternAnchor, mask, start, end, rate, replace, selectedId)
+                onCustomPattern(patternAnchor, mask, start, end, rate, replace, selectedWorkplace.id)
             }
         )
         if (showAddWorkplace) {
@@ -284,11 +330,36 @@ fun SmennikApp(
                 busy = state.isBusy,
                 onDismiss = { showAddWorkplace = false },
                 onAdd = { name, rate ->
-                    val result = onAddWorkplace(name, rate)
+                    val result = onAddWorkplace(name, rate, selectedPerson.id)
                     if (result.isSuccess) {
                         showAddWorkplace = false
                         snackbarHostState.showSnackbar("Место работы добавлено.")
                     }
+                    result
+                }
+            )
+        }
+        if (showAddPerson) {
+            PersonNameDialog(
+                title="Добавить человека",initialName="",busy=state.isBusy,
+                onDismiss={showAddPerson=false},
+                onSave={ name ->
+                    val result=onAddPerson(name)
+                    if(result.isSuccess) {
+                        showAddPerson=false
+                        snackbarHostState.showSnackbar("Человек добавлен. Выберите профиль сверху.")
+                    }
+                    result
+                }
+            )
+        }
+        if (showRenamePerson) {
+            PersonNameDialog(
+                title="Имя человека",initialName=selectedPerson.name,busy=state.isBusy,
+                onDismiss={showRenamePerson=false},
+                onSave={name ->
+                    val result=onRenamePerson(selectedPerson.id,name)
+                    if(result.isSuccess) showRenamePerson=false
                     result
                 }
             )

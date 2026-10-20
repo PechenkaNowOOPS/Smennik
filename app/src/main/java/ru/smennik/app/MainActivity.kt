@@ -33,6 +33,8 @@ class MainActivity : ComponentActivity() {
                 onBulkPlan = model::applyBulkPlan,
                 onBulkMove = model::movePlannedShifts,
                 onAddWorkplace = model::addWorkplace,
+                onAddPerson = model::addPerson,
+                onRenamePerson = model::renamePerson,
                 onUpdatePayRules = model::updatePayRules,
                 onUpdateMonthlyGoal = model::updateMonthlyGoal,
                 onExportBackup = model::exportBackup,
