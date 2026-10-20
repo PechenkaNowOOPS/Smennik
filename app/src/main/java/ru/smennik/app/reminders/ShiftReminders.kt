@@ -111,6 +111,8 @@ object ShiftReminders {
             }
         }
         prefs.edit().putStringSet(SCHEDULED, ids).apply()
+        // Clock-driven timers are always enabled, unlike optional notifications.
+        AutomaticShiftStartScheduler.sync(app,shifts)
     }
 
     private fun alarmId(job: Long, date: LocalDate): Int =
@@ -171,15 +173,20 @@ class ReminderReceiver : BroadcastReceiver() {
                         date,
                         intent.getLongExtra("expected_start_ms", 0L)
                     )
+                } else if (intent.action == AutomaticShiftStartScheduler.START_ACTION) {
+                    AutomaticShiftStartScheduler.catchUp(context)
                 } else if (intent.action in listOf(
+                        AutomaticShiftStartScheduler.REFRESH_ACTION,
                         "ru.smennik.app.REMINDER_REFRESH",
                         Intent.ACTION_BOOT_COMPLETED,
                         Intent.ACTION_TIME_CHANGED,
                         Intent.ACTION_TIMEZONE_CHANGED,
                         Intent.ACTION_MY_PACKAGE_REPLACED
                     )) {
+                    AutomaticShiftStartScheduler.catchUp(context)
                     ShiftReminders.syncFromDatabase(context)
                     ShiftWidgetUpdater.updateAll(context)
+                    WorkdayNotifications.sync(context)
                 }
             } catch (_: Exception) {
                 // Android will retry scheduling when the app opens or data changes.
