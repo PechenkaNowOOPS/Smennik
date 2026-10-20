@@ -415,6 +415,61 @@ class ShiftStore(context: Context) : SQLiteOpenHelper(context, "smennik.db", nul
         } finally { db.endTransaction() }
     }
 
+    /**
+     * Start an automatic timer at the PLANNED start instant, even if its alarm
+     * arrives late. Reads and writes occur in one SQLite transaction so a
+     * notification, activity, and another process cannot create duplicates.
+     *
+     * The calendar row must still match this scheduled event. Neither a
+     * manually started nor a completed shift is ever restarted automatically.
+     */
+    fun startScheduledSessionIfDue(shift: WorkShift, nowMs: Long, zone: ZoneId): Boolean {
+        if (shift.type != DayType.WORK) return false
+        val startMs = shift.startsAt.atZone(zone).toInstant().toEpochMilli()
+        val endMs = shift.endsAt.atZone(zone).toInstant().toEpochMilli()
+        if (nowMs < startMs || nowMs >= endMs) return false
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val table = if (shift.workplaceId == 1L) "shifts" else "workplace_shifts"
+            val where = if (shift.workplaceId == 1L) "date=?" else "date=? AND workplace_id=?"
+            val args = if (shift.workplaceId == 1L) arrayOf(shift.date.toString())
+                else arrayOf(shift.date.toString(), shift.workplaceId.toString())
+            val unchanged = db.query(table,
+                arrayOf("type","start_minutes","end_minutes","hourly_kopecks"),
+                where,args,null,null,null
+            ).use { c ->
+                c.moveToFirst() && c.getString(0) == DayType.WORK.name &&
+                    c.getInt(1) == shift.startMinutes &&
+                    c.getInt(2) == shift.endMinutes &&
+                    c.getLong(3) == shift.hourlyKopecks
+            }
+            if (!unchanged) return false
+            val hasSession = db.rawQuery(
+                "SELECT COUNT(*) FROM work_sessions WHERE shift_date=? AND workplace_id=?",
+                arrayOf(shift.date.toString(),shift.workplaceId.toString())
+            ).use { c -> c.moveToFirst() && c.getLong(0) > 0L }
+            if (hasSession) return false
+            val personIsWorking = db.rawQuery("""SELECT COUNT(*) FROM work_sessions s
+                JOIN workplaces w ON w.id=s.workplace_id
+                WHERE s.ended_ms IS NULL AND w.person_id=(
+                    SELECT person_id FROM workplaces WHERE id=?
+                )""", arrayOf(shift.workplaceId.toString())
+            ).use { c -> c.moveToFirst() && c.getLong(0) > 0L }
+            if (personIsWorking) return false
+            db.insertOrThrow("work_sessions",null,ContentValues().apply {
+                put("shift_date",shift.date.toString())
+                put("workplace_id",shift.workplaceId)
+                put("started_ms",startMs)
+                put("hourly_kopecks",shift.hourlyKopecks)
+            })
+            db.setTransactionSuccessful()
+            return true
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun togglePause(id: Long, nowMs: Long) {
         val db = writableDatabase
         db.beginTransaction()
