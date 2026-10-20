@@ -480,6 +480,8 @@ private fun AddWorkplaceDialog(
 private data class VersionNote(val name: String, val notes: String)
 
 private val versionHistory = listOf(
+    VersionNote("0.10.1", "Автоматический старт таймера в момент начала смены по графику."),
+    VersionNote("0.10.0", "Несколько человек на одном устройстве, независимые графики и учёт."),
     VersionNote("0.9.1", "Обратный отсчёт до конца смены с поддержкой ночных и суточных графиков."),
     VersionNote("0.9.0", "Таймер с секундами, действия в уведомлениях, план/факт и прогноз зарплаты."),
     VersionNote("0.8.1", "Улучшена технология подготовки установочного APK с проверкой подписи."),
