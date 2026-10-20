@@ -62,6 +62,7 @@ private fun rubles(kopecks: Long): String =
 fun SmennikApp(
     state: ShiftUiState,
     onRetryLoad: () -> Unit,
+    onAutomaticStart: () -> Unit,
     onSave: suspend (WorkShift) -> Result<Unit>,
     onRemove: suspend (LocalDate, Long) -> Result<Unit>,
     onPattern: suspend (LocalDate, WorkPattern, Int, Int, Long, Boolean, Long) -> Result<Unit>,
@@ -120,6 +121,19 @@ fun SmennikApp(
     val shiftsOfJob = personShifts.filter { selectedId == 0L || it.workplaceId == selectedId }
     val sessionsOfJob = personSessions.filter { selectedId == 0L || it.workplaceId == selectedId }
     val paymentsOfJob = personPayments.filter { selectedId == 0L || it.workplaceId == selectedId }
+    // If the application stays open across the scheduled start time, refresh
+    // the persisted timer immediately instead of relying on a background alarm.
+    LaunchedEffect(state.shifts, state.sessions, state.isLoading, state.loadingError) {
+        if (!state.isLoading && state.loadingError == null) {
+            val untilStart = millisUntilNextAutomaticStart(
+                state.shifts, state.sessions, System.currentTimeMillis(), ZoneId.systemDefault()
+            )
+            if (untilStart != null) {
+                delay(untilStart)
+                onAutomaticStart()
+            }
+        }
+    }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     fun launchOperation(action: suspend () -> Result<Unit>) {
@@ -677,7 +691,8 @@ private fun HomeScreen(
                 Text("ФАКТИЧЕСКОЕ ВРЕМЯ", color = lime, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 if (activeSession == null) {
                     Text("Учёт времени не запущен", fontWeight = FontWeight.SemiBold)
-                    Text("Время работы и перерывов сохраняется даже после закрытия приложения.",
+                    Text("По графику таймер включается сам в момент начала смены, " +
+                        "даже если приложение закрыто. Вручную запускать необязательно.",
                         color = textMuted, fontSize = 13.sp)
                     Button(
                         enabled = !isBusy && !activeElsewhere,
